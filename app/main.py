@@ -1,7 +1,7 @@
 import os
 import time
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Dict
 import logging
 import contextlib
 import glob
@@ -143,12 +143,12 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
     logger.info("DeepFace analysis completed entries=%d", len(facial_timeline))
 
-    # 5) Audio emotion analysis using Vesper (optional)
+    # 5) Audio emotion analysis using Vesper (required)
     try:
         audio_timeline = analyze_audio_with_vesper(audio_path=audio_path)
     except Exception as exc:
-        # Do not fail the whole pipeline if Vesper is not available or errors out
-        audio_timeline = []
+        logger.exception("Audio emotion analysis failed (Vesper required)")
+        raise HTTPException(status_code=500, detail=f"Audio emotion analysis failed: {exc}") from exc
     logger.info("Audio emotion timeline entries=%d", len(audio_timeline))
 
     # 6) Merge into a unified timeline
@@ -171,7 +171,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         },
         timeline_json=merged_timeline,
         spikes_json=spikes,
-        notes="Audio analysis uses Vesper if available; otherwise, only facial emotions are merged.",
+        notes="Audio emotion analysis performed with Vesper.",
         transcript_text=transcript_text,
         transcript_segments=transcript_segments,
     )

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 def transcribe_audio_with_faster_whisper(
     audio_path: str,
     model_size: str = "small",
-    language: Optional[str] = None,
+    language: Optional[str] = "en",
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Returns (full_text, segments). Each segment has:
@@ -21,7 +21,8 @@ def transcribe_audio_with_faster_whisper(
         segments_iter, _info = model.transcribe(
             audio_path,
             language=language,
-            vad_filter=True,
+            vad_filter=False,
+            beam_size=5,
         )
         segments_list: List[Dict[str, Any]] = []
         full_text_parts: List[str] = []
@@ -35,5 +36,4 @@ def transcribe_audio_with_faster_whisper(
         return full_text, segments_list
     except Exception:
         return "", []
-
 
