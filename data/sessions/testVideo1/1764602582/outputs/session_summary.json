@@ -1,0 +1,80 @@
+{
+  "patient_id": "testVideo1",
+  "session_id": 1764602582,
+  "duration": 28.1,
+  "overall_congruence": 0.7044,
+  "legacy_congruence": 0.1601,
+  "incongruent_moments": [
+    {
+      "start": 2.1,
+      "end": 16.8,
+      "reason": "The speaker's verbal content, stating \"Just say anything,\" reflects a dismissive attitude, yet the face shows a significantly positive valence (0.632) while the audio conveys a negative valence (-0.125), indicating a divergence between text and face as well as text and audio modalities. This incongruence suggests a potential masking of true feelings or uncertainty despite a seemingly confident facial expression. [t: 2.1–16.8 s; text_v: -0.059; face_v: 0.632; audio_v: -0.125]"
+    },
+    {
+      "start": 19.1,
+      "end": 28.0,
+      "reason": "The speaker's verbal content, stating \"I have a million dollars,\" suggests a positive self-image; however, the non-verbal signals reveal a stark contrast, with a mean face valence of -0.0498 and audio valence of -0.1250 indicating negative emotional states. This divergence between the text's positive assertion and the face/audio's negative metrics suggests a lack of genuine confidence or possible sarcasm in the claim. [t: 19.1–28.0 s; text_v: 0.0596; face_v: -0.0498; audio_v: -0.1250]."
+    }
+  ],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.3458155354658977,
+      "sadness": 0.03129177495634386,
+      "anger": 0.0064110972603004,
+      "fear": 0.0012251022822620974,
+      "disgust": 2.4863617150740766e-06,
+      "surprise": 0.007747723190241523,
+      "neutral": 0.6075062804832393
+    },
+    "audio": {
+      "joy": 0.050000000000000294,
+      "sadness": 0.050000000000000294,
+      "anger": 0.050000000000000294,
+      "fear": 0.050000000000000294,
+      "disgust": 0.050000000000000294,
+      "surprise": 0.050000000000000294,
+      "neutral": 0.6999999999999982
+    },
+    "text": {
+      "joy": 0.07589391628537534,
+      "sadness": 0.048135909167937904,
+      "anger": 0.020271140484663525,
+      "fear": 0.047317403829859564,
+      "disgust": 0.014470428740891243,
+      "surprise": 0.06514658532452121,
+      "neutral": 0.7287646161667513
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.7044,
+    "num_incongruent_segments": 2
+  },
+  "transcript_text": "Um, my name is, wait, can I give you lies too? Just say anything. Alright, my name is Rob Wazowski, um, I'm 21 years old, uh, I was born in 2010, um, I drive a red car, um, and uh, I have a million dollars in my bank account right now.",
+  "transcript_segments": [
+    {
+      "start": 0.0,
+      "end": 4.84,
+      "text": " Um, my name is, wait, can I give you lies too?"
+    },
+    {
+      "start": 4.84,
+      "end": 5.84,
+      "text": " Just say anything."
+    },
+    {
+      "start": 5.84,
+      "end": 19.240000000000002,
+      "text": " Alright, my name is Rob Wazowski, um, I'm 21 years old, uh, I was born in 2010, um,"
+    },
+    {
+      "start": 19.240000000000002,
+      "end": 27.080000000000002,
+      "text": " I drive a red car, um, and uh, I have a million dollars in my bank account right"
+    },
+    {
+      "start": 27.080000000000002,
+      "end": 28.080000000000002,
+      "text": " now."
+    }
+  ]
+}

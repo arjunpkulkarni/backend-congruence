@@ -1,0 +1,52 @@
+{
+  "patient_id": "testVideo1",
+  "session_id": 1764600925,
+  "duration": 28.1,
+  "overall_congruence": 0.705,
+  "legacy_congruence": 0.1601,
+  "incongruent_moments": [
+    {
+      "start": 2.1,
+      "end": 16.8,
+      "reason": "The speaker's verbal content, stating \"Just say anything,\" reflects a dismissive attitude, yet the facial expressions indicate a positive engagement with a mean face valence of 0.632, contrasting sharply with the negative audio valence of -0.125 and the mean text valence of -0.078, suggesting a dissonance between the spoken words and non-verbal cues. This divergence highlights a conflict between the text and audio modalities versus the face modality. [t: 2.1–16.8 s; text_v: -0.078; face_v: 0.632; audio_v: -0.125]"
+    },
+    {
+      "start": 19.1,
+      "end": 28.0,
+      "reason": "The speaker's verbal assertion, \"I have a million dollars,\" contrasts sharply with the negative valence observed in both facial expressions (mean face valence: -0.0498) and audio tone (mean audio valence: -0.1250), indicating a dissonance between the content of the speech and the non-verbal signals. This incongruence suggests a potential lack of sincerity or confidence in the claim made during the time window of t=19.1–28.0 s. [t: 19.1–28.0 s; text_v: 0.059; face_v: -0.0498; audio_v: -0.125]"
+    }
+  ],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.3458155354658977,
+      "sadness": 0.03129177495634386,
+      "anger": 0.0064110972603004,
+      "fear": 0.0012251022822620974,
+      "disgust": 2.4863617150740766e-06,
+      "surprise": 0.007747723190241523,
+      "neutral": 0.6075062804832393
+    },
+    "audio": {
+      "joy": 0.050000000000000294,
+      "sadness": 0.050000000000000294,
+      "anger": 0.050000000000000294,
+      "fear": 0.050000000000000294,
+      "disgust": 0.050000000000000294,
+      "surprise": 0.050000000000000294,
+      "neutral": 0.6999999999999982
+    },
+    "text": {
+      "joy": 0.07589391628537509,
+      "sadness": 0.048135909167937745,
+      "anger": 0.02027114048466346,
+      "fear": 0.0568547703779023,
+      "disgust": 0.01923911201491259,
+      "surprise": 0.06991526859854234,
+      "neutral": 0.7096898830706665
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.705,
+    "num_incongruent_segments": 2
+  }
+}
