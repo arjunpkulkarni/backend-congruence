@@ -1,14 +1,10 @@
 from typing import Any, Dict, List, Optional, Tuple
 import math
-
 from .llm import analyze_text_emotion_with_llm, generate_incongruence_reason
 
-
-# Supported emotions and canonical order (canonical 7D for TECS)
 EMOTION_ORDER: List[str] = ["joy", "sadness", "anger", "fear", "disgust", "surprise", "neutral"]
 EMOTION_KEYS: List[str] = EMOTION_ORDER[:]
 
-# Canonical 7-emotion basis for TECS/MSW-TECS
 CANONICAL_EMOTIONS: List[str] = [
     "joy",
     "sadness",
@@ -19,7 +15,6 @@ CANONICAL_EMOTIONS: List[str] = [
     "neutral",
 ]
 
-# Fixed valence/arousal lookup as specified
 VALENCE_TABLE: Dict[str, float] = {
     "happy": 1.0,
     "neutral": 0.0,
@@ -39,7 +34,6 @@ AROUSAL_TABLE: Dict[str, float] = {
     "surprise": 0.9,
 }
 
-# Thresholds
 VALENCE_THRESHOLD_BASE: float = 0.4
 VALENCE_THRESHOLD_TEXT_RELAXED: float = 0.6
 AROUSAL_THRESHOLD_BASE: float = 0.3
@@ -139,11 +133,13 @@ def _analyze_transcript_segments(segments: Optional[List[Dict[str, Any]]]) -> Li
             val = 0.0
             aro = 0.0
             style = "uncertain"
+            reason = ""
         else:
             dist = analysis.get("emotion_distribution", {}) or {}
             val = float(analysis.get("valence", 0.0) or 0.0)
             aro = float(analysis.get("arousal", 0.0) or 0.0)
             style = str(analysis.get("style", "uncertain") or "uncertain")
+            reason = str(analysis.get("reason", "") or "")
         analyzed.append(
             {
                 **seg,
@@ -151,6 +147,7 @@ def _analyze_transcript_segments(segments: Optional[List[Dict[str, Any]]]) -> Li
                 "valence": val,
                 "arousal": aro,
                 "style": style,
+                "reason": reason,
             }
         )
     return analyzed
@@ -217,6 +214,7 @@ def _attach_text_to_timeline(
             step["text"] = {
                 "emotion_distribution": dict(seg.get("emotion_distribution", {})),
                 "style": seg.get("style", "uncertain"),
+                "reason": seg.get("reason", ""),
             }
             step["client_speaking"] = True
         else:
@@ -394,6 +392,8 @@ def build_session_summary(
                     reason_llm = generate_incongruence_reason(
                         text_snippet=snippet,
                         metrics={
+                            "start": start_t,
+                            "end": end_t,
                             "mean_text_valence": mean_text_val,
                             "mean_nontext_valence": mean_nontext_val,
                             "mean_face_valence": mean_face_val,
@@ -432,6 +432,8 @@ def build_session_summary(
             reason_llm = generate_incongruence_reason(
                 text_snippet=snippet,
                 metrics={
+                    "start": start_t,
+                    "end": end_t,
                     "mean_text_valence": mean_text_val,
                     "mean_nontext_valence": mean_nontext_val,
                     "mean_face_valence": mean_face_val,

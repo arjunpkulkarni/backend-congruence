@@ -1,0 +1,41 @@
+{
+  "patient_id": "testVideo",
+  "session_id": 1764634592,
+  "duration": 16.1,
+  "overall_congruence": 0.8641,
+  "legacy_congruence": 1.0,
+  "incongruent_moments": [],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.05580401454053778,
+      "sadness": 0.030336888226117107,
+      "anger": 0.004781711171717689,
+      "fear": 0.07215781576044335,
+      "disgust": 0.040360689919786995,
+      "surprise": 0.0021905909865186494,
+      "neutral": 0.7943682893948785
+    },
+    "audio": {
+      "joy": 0.04999999999999982,
+      "sadness": 0.04999999999999982,
+      "anger": 0.04999999999999982,
+      "fear": 0.04999999999999982,
+      "disgust": 0.04999999999999982,
+      "surprise": 0.04999999999999982,
+      "neutral": 0.700000000000001
+    },
+    "text": {
+      "joy": 0.04999999999999992,
+      "sadness": 0.05624999999999993,
+      "anger": 0.023750000000000014,
+      "fear": 0.03625,
+      "disgust": 0.021250000000000012,
+      "surprise": 0.03249999999999999,
+      "neutral": 0.7800000000000001
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.8641,
+    "num_incongruent_segments": 0
+  }
+}

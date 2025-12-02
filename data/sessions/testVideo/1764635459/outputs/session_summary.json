@@ -1,0 +1,47 @@
+{
+  "patient_id": "testVideo",
+  "session_id": 1764635459,
+  "duration": 16.1,
+  "overall_congruence": 0.862,
+  "legacy_congruence": 0.5714,
+  "incongruent_moments": [
+    {
+      "start": 0.0,
+      "end": 6.9,
+      "reason": "The speaker's verbal content, which is neutral (\"Hello\"), contrasts with negative non-verbal signals indicated by low valence scores across facial expressions and audio tone, suggesting a lack of alignment between their words and emotional state."
+    }
+  ],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.05580401454053778,
+      "sadness": 0.030336888226117107,
+      "anger": 0.004781711171717689,
+      "fear": 0.07215781576044335,
+      "disgust": 0.040360689919786995,
+      "surprise": 0.0021905909865186494,
+      "neutral": 0.7943682893948785
+    },
+    "audio": {
+      "joy": 0.04999999999999982,
+      "sadness": 0.04999999999999982,
+      "anger": 0.04999999999999982,
+      "fear": 0.04999999999999982,
+      "disgust": 0.04999999999999982,
+      "surprise": 0.04999999999999982,
+      "neutral": 0.700000000000001
+    },
+    "text": {
+      "joy": 0.04999999999999986,
+      "sadness": 0.029999999999999985,
+      "anger": 0.014999999999999993,
+      "fear": 0.027499999999999962,
+      "disgust": 0.021249999999999988,
+      "surprise": 0.029999999999999985,
+      "neutral": 0.8262500000000002
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.862,
+    "num_incongruent_segments": 1
+  }
+}

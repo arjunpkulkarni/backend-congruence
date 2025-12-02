@@ -67,6 +67,9 @@ def analyze_text_emotion_with_llm(
     text: str,
     model: Optional[str] = None,
     instruction: Optional[str] = None,
+    ensemble_size: int = 1,
+    few_shot: bool = False,
+    temperature: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Ask an LLM to estimate:
@@ -92,24 +95,69 @@ def analyze_text_emotion_with_llm(
         return None
 
     sys_msg = """
-You are an affective computing engine that analyzes the emotional content of spoken language.
-Your task:
-- Input: a short transcript segment from a therapy or conversation session.
-- Output: a JSON object that gives a probability distribution over exactly 7 basic emotions:
-  ["joy","sadness","anger","fear","disgust","surprise","neutral"].
+You are an affective computing engine that analyzes the emotional content of spoken language. 
+Your job is to map short transcript segments to numerical affect metrics and structured diarization.
 
-Rules:
-- Always return valid JSON. No extra text, no explanations.
-- The JSON must have a single key "emotion_distribution" whose value is an object mapping each of the 7 emotions to a float in [0,1].
-- The probabilities must sum to 1 (within normal floating-point rounding error).
-- Optionally include keys "valence" (in [-1,1]), "arousal" (in [0,1]), and "style" (one of: serious, joking, sarcastic, uncertain).
+PRIMARY TASK:
+- Input: a short transcript segment from a therapy or conversation session. The snippet may contain one or more speakers (e.g., therapist and client).
+- Output: a **valid JSON object** with the following structure:
 
-Guidelines:
-- Focus on the felt emotion implied by what is said, not only explicit emotion words.
-- If the transcript is emotionally flat or unclear, assign higher probability to "neutral".
-- If multiple emotions are present, distribute probability across them instead of forcing a single label.
+1. A top-level key "emotion_distribution" containing a probability distribution across exactly these 7 emotions:
+   ["joy","sadness","anger","fear","disgust","surprise","neutral"].
+   - Each value must be a float in [0,1].
+   - The probabilities must sum to 1 (± floating point rounding).
 
-Output format example (structure only):
+2. If the snippet contains **multiple speakers** (explicit labels or inferred), include:
+   "speakers": [
+      {
+        "speaker": "<label>",
+        "text": "<portion attributed to this speaker>",
+        "emotion_distribution": { seven emotions, summing to 1 },
+        Optional: "valence": float in [-1,1],
+                  "arousal": float in [0,1],
+                  "style": "serious" | "joking" | "sarcastic" | "uncertain"
+      },
+      ...
+   ]
+   - Use explicit speaker labels if present (e.g., "Therapist:", "Client:").
+   - If unlabeled, assign canonical labels: "SPEAKER_00", "SPEAKER_01", etc.
+
+3. If only **one speaker** is present:
+   - You may include "speaker": "<label>" at the top level.
+   - Do NOT include a "speakers" array unless multiple speakers exist.
+
+DIARIZATION RULES:
+- Perform text-based diarization.
+- Split turns correctly.
+- Trim leading/trailing whitespace.
+- Keep each speaker's text exactly as it appears (minus label prefixes).
+
+EMOTION ESTIMATION:
+- Focus on the felt emotional content, not just explicit emotion words.
+- If the snippet is emotionally flat, assign higher "neutral".
+- If mixed emotions appear, distribute probability instead of forcing one label.
+- The 7 emotions **must always appear** with probability values.
+
+OPTIONAL METRICS:
+You may include these at the top level or per speaker:
+- "valence": float ∈ [-1,1]
+- "arousal": float ∈ [0,1]
+- "style": one of "serious", "joking", "sarcastic", "uncertain"
+
+STRICT OUTPUT RULES:
+- **Always return valid JSON.**
+- **No extra text or explanations.**
+- **Do not include any keys not described above.**
+- **Do not include reasoning or chain-of-thought.**
+- The final output must be a pure JSON object.
+
+CONSTRAINTS FOR CONSISTENCY:
+- Use stable, conservative probability assignments.
+- Avoid speculation; rely only on linguistic cues.
+- Ensure diarization is consistent across similar inputs.
+
+Output format examples (structure only):
+Single speaker:
 {
   "emotion_distribution": {
     "joy": 0.10,
@@ -122,43 +170,145 @@ Output format example (structure only):
   },
   "valence": 0.0,
   "arousal": 0.3,
-  "style": "serious"
+  "style": "serious",
+  "speaker": "SPEAKER_00"
+}
+
+Multiple speakers:
+{
+  "emotion_distribution": {
+    "joy": 0.12,
+    "sadness": 0.18,
+    "anger": 0.06,
+    "fear": 0.09,
+    "disgust": 0.03,
+    "surprise": 0.04,
+    "neutral": 0.48
+  },
+  "speakers": [
+    {
+      "speaker": "Therapist",
+      "text": "How have you been sleeping?",
+      "emotion_distribution": {
+        "joy": 0.08,
+        "sadness": 0.10,
+        "anger": 0.02,
+        "fear": 0.05,
+        "disgust": 0.01,
+        "surprise": 0.02,
+        "neutral": 0.72
+      },
+      "valence": 0.0,
+      "arousal": 0.2,
+      "style": "serious"
+    },
+    {
+      "speaker": "Client",
+      "text": "Not great; I wake up a lot at night.",
+      "emotion_distribution": {
+        "joy": 0.03,
+        "sadness": 0.25,
+        "anger": 0.05,
+        "fear": 0.20,
+        "disgust": 0.02,
+        "surprise": 0.03,
+        "neutral": 0.42
+      },
+      "valence": -0.25,
+      "arousal": 0.4,
+      "style": "serious"
+    }
+  ]
 }
     """.strip()
 
     if instruction:
         sys_msg += f"\nAdditional instruction: {instruction}"
 
+    messages = [{"role": "system", "content": sys_msg}]
+    
     try:
+        messages_call = list(messages) + [{"role": "user", "content": text[:4000]}]
+        use_ensemble = max(1, int(ensemble_size or 1))
+        temp = (
+            float(temperature)
+            if temperature is not None
+            else (0.2 if use_ensemble == 1 else 0.7)
+        )
         resp = client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": sys_msg},
-                {"role": "user", "content": text[:4000]},
-            ],
-            temperature=0.2,
+            messages=messages_call,
+            n=use_ensemble,
+            temperature=temp,
             response_format={"type": "json_object"},
         )
-        content = resp.choices[0].message.content
-        parsed = json.loads(content)
 
-        # Extract + clamp valence/arousal
-        valence = float(parsed.get("valence", 0.0))
-        arousal = float(parsed.get("arousal", 0.0))
+        # Aggregate over choices (self-consistency)
+        agg_emotions: Dict[str, float] = {}
+        valence_sum = 0.0
+        arousal_sum = 0.0
+        styles: Dict[str, int] = {}
+        valid = 0
+        first_reason: Optional[str] = None
+        first_speaker: Optional[str] = None
+        first_speakers_block: Optional[Any] = None
+        for choice in (resp.choices or []):
+            content = getattr(choice.message, "content", None)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                continue
+            valence = float(parsed.get("valence", 0.0))
+            arousal = float(parsed.get("arousal", 0.0))
+            raw_emotions = parsed.get("emotion_distribution", {}) or parsed.get("emotions", {}) or {}
+            emotions = _normalize_emotion_distribution(raw_emotions) if raw_emotions else {"neutral": 1.0}
+            for k, v in emotions.items():
+                agg_emotions[k] = agg_emotions.get(k, 0.0) + float(v)
+            style_val = str(parsed.get("style", "") or "").strip().lower()
+            if style_val in {"serious", "joking", "sarcastic", "uncertain"}:
+                styles[style_val] = styles.get(style_val, 0) + 1
+            valence_sum += valence
+            arousal_sum += arousal
+            valid += 1
+            if first_reason is None:
+                r = parsed.get("reason") or parsed.get("rationale")
+                if isinstance(r, str) and r.strip():
+                    first_reason = r.strip()
+            if first_speaker is None:
+                s = parsed.get("speaker")
+                if isinstance(s, str) and s.strip():
+                    first_speaker = s.strip()
+            if first_speakers_block is None and isinstance(parsed.get("speakers"), list):
+                first_speakers_block = parsed.get("speakers")
 
-        raw_emotions = parsed.get("emotion_distribution", {}) or parsed.get("emotions", {}) or {}
-        emotions = _normalize_emotion_distribution(raw_emotions) if raw_emotions else {"neutral": 1.0}
+        if valid == 0:
+            return None
 
-        style = str(parsed.get("style", "") or "").strip().lower()
-        if style not in {"serious", "joking", "sarcastic", "uncertain"}:
-            style = "uncertain"
+        # Average and normalize
+        for k in list(agg_emotions.keys() or []):
+            agg_emotions[k] /= float(valid)
+        norm_emotions = _normalize_emotion_distribution(agg_emotions)
+        avg_valence = max(-1.0, min(1.0, valence_sum / float(valid)))
+        avg_arousal = max(0.0, min(1.0, arousal_sum / float(valid)))
+        style = "uncertain"
+        if styles:
+            style = max(styles.items(), key=lambda kv: kv[1])[0]
 
-        return {
-            "valence": max(-1.0, min(1.0, valence)),
-            "arousal": max(0.0, min(1.0, arousal)),
-            "emotion_distribution": {str(k): float(v) for k, v in emotions.items()},
+        result: Dict[str, Any] = {
+            "valence": avg_valence,
+            "arousal": avg_arousal,
+            "emotion_distribution": {str(k): float(v) for k, v in norm_emotions.items()},
             "style": style,
         }
+        if first_reason:
+            result["reason"] = first_reason
+        if first_speaker:
+            result["speaker"] = first_speaker
+        if first_speakers_block is not None:
+            result["speakers"] = first_speakers_block
+        return result
     except Exception:
         return None
 
@@ -188,19 +338,26 @@ def generate_incongruence_reason(
         metrics_json = "{}"
 
     system_msg = (
-        "You are a clinical communication analyst. Given a transcript snippet and "
-        "numeric affect metrics, provide a brief explanation of why the speaker's "
-        "verbal content and non-verbal signals may be incongruent.\n"
-        "- Be precise and neutral in tone.\n"
-        "- Prefer concrete cues over speculation.\n"
-        "- 1–2 sentences only."
+        "You are a clinical communication analyst. Given a transcript snippet and numeric affect metrics, "
+        "explain WHY the speaker's verbal content (text) and non-verbal signals (face/audio) are incongruent.\n"
+        "\n"
+        "Write like a careful detective:\n"
+        "- Explicitly compare modalities: state which ones disagree (text vs face, text vs audio, face vs audio).\n"
+        "- Use the provided mean valences and cite them with signs and 3 decimals (e.g., text_v: +0.245, face_v: -0.512).\n"
+        "- If a transcript is available, quote a short fragment (≤8 words) that most reflects the verbal tone.\n"
+        "- Prefer concrete observations over speculation; do not invent cues.\n"
+        "- Keep a neutral, precise tone. Avoid generic phrasing.\n"
+        "- 1–2 sentences only.\n"
+        "- End with a compact bracket summarizing metrics, and include the time range if provided in metrics as 'start'/'end': "
+        "[t: <start>–<end> s; text_v: <x.xxx>; face_v: <y.yyy>; audio_v: <z.zzz>]."
     )
 
     user_msg = (
         f"Transcript snippet:\n\"\"\"\n{snippet_use}\n\"\"\"\n\n"
         f"Metrics (JSON): {metrics_json}\n\n"
-        "Write a single concise reason (1–2 sentences). If insufficient information, say: "
-        "\"Insufficient information.\""
+        "Task: Provide a single concise detective-style reason (1–2 sentences) comparing modalities explicitly, "
+        "citing numeric mean valences with 3 decimals and ending with the bracket summary. "
+        "If insufficient information, respond exactly with: \"Insufficient information.\""
     )
 
     try:
