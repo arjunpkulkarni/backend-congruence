@@ -271,3 +271,5 @@ For issues or questions about performance optimizations, check:
 
 Fast mode is now **enabled by default** and provides excellent quality for most use cases while being dramatically faster and cheaper.
 
+
+

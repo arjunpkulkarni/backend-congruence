@@ -25,6 +25,7 @@ from app.services.congruence import (
     extract_congruence_events,
 )
 from app.services.transcription import transcribe_audio_with_faster_whisper
+from app.services.notes import generate_therapist_notes, save_therapist_notes
 from app.utils.paths import get_workspace_root, create_session_directories
 
 
@@ -177,6 +178,19 @@ def run_local_pipeline(
         transcript_segments=transcript_segments,
     )
 
+    # Generate therapist notes (final step)
+    logger.info("Generating therapist notes")
+    therapist_notes = generate_therapist_notes(
+        transcript_text=transcript_text,
+        transcript_segments=transcript_segments,
+        session_summary=session_summary,
+        patient_id=patient_id,
+    )
+    if therapist_notes:
+        logger.info("Therapist notes generated successfully (%d chars)", len(therapist_notes))
+    else:
+        logger.info("Therapist notes generation skipped (API key not configured or generation failed)")
+
     # Save outputs
     timeline_json_path = os.path.join(outputs_dir, "timeline.json")
     timeline_1hz_path = os.path.join(outputs_dir, "timeline_1hz.json")
@@ -186,6 +200,7 @@ def run_local_pipeline(
     congruence_timeline_path = os.path.join(outputs_dir, "congruence_timeline.json")
     congruence_events_path = os.path.join(outputs_dir, "congruence_events.json")
     session_summary_path = os.path.join(outputs_dir, "session_summary.json")
+    therapist_notes_path = os.path.join(outputs_dir, "therapist_notes.md")
 
     logger.info("Writing outputs to %s", outputs_dir)
     # Enriched 10Hz timeline for UI consumption
@@ -200,6 +215,9 @@ def run_local_pipeline(
         _write_text(transcript_txt_path, transcript_text)
     if transcript_segments:
         _write_json(transcript_segments_path, transcript_segments)
+    if therapist_notes:
+        save_therapist_notes(therapist_notes, therapist_notes_path)
+        logger.info("Therapist notes saved to %s", therapist_notes_path)
 
     duration = time.time() - start_time
     logger.info(
@@ -227,6 +245,8 @@ def run_local_pipeline(
         "transcript_segments_count": len(transcript_segments or []),
         "duration_s": duration,
         "session_summary": session_summary,
+        "therapist_notes_generated": therapist_notes is not None,
+        "therapist_notes_chars": len(therapist_notes) if therapist_notes else 0,
     }
 
 

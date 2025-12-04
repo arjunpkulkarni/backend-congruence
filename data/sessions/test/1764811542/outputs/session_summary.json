@@ -1,0 +1,52 @@
+{
+  "patient_id": "test",
+  "session_id": 1764811542,
+  "duration": 28.1,
+  "overall_congruence": 0.7146,
+  "legacy_congruence": 0.1032,
+  "incongruent_moments": [
+    {
+      "start": 2.1,
+      "end": 16.8,
+      "reason": "The speaker's verbal content expresses confusion and deception (\"wait can I give it lies to?\"). However, their face displays a significantly positive valence (face_v: 0.632) which contradicts the negative tone in the text. This incongruence suggests a potential mismatch between their words and facial expressions. [t: 2.1–16.8 s; text_v: -0.067; face_v: 0.632; audio_v: -0.125]"
+    },
+    {
+      "start": 17.5,
+      "end": 28.0,
+      "reason": "The speaker's verbal content describes owning a red car and a million dollars, but their non-verbal cues (face and audio) convey negativity and low arousal, suggesting potential deception or insincerity. The mismatch between the positive text valence (+0.040) and the negative face valence (-0.047) and audio valence (-0.125) indicates incongruence in their communication. [t: 17.5–28.0 s; text_v: 0.040; face_v: -0.047; audio_v: -0.125]"
+    }
+  ],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.3458155354658977,
+      "sadness": 0.03129177495634386,
+      "anger": 0.0064110972603004,
+      "fear": 0.0012251022822620974,
+      "disgust": 2.4863617150740766e-06,
+      "surprise": 0.007747723190241523,
+      "neutral": 0.6075062804832393
+    },
+    "audio": {
+      "joy": 0.050000000000000294,
+      "sadness": 0.050000000000000294,
+      "anger": 0.050000000000000294,
+      "fear": 0.050000000000000294,
+      "disgust": 0.050000000000000294,
+      "surprise": 0.050000000000000294,
+      "neutral": 0.6999999999999982
+    },
+    "text": {
+      "joy": 0.09666666666666665,
+      "sadness": 0.06759259259259298,
+      "anger": 0.05333333333333335,
+      "fear": 0.046333333333333754,
+      "disgust": 0.02303703703703707,
+      "surprise": 0.12166666666666677,
+      "neutral": 0.5913703703703694
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.7146,
+    "num_incongruent_segments": 2
+  }
+}
