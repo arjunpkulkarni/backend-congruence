@@ -1,0 +1,44 @@
+[
+  {
+    "start": 3.0,
+    "end": 5.0,
+    "type": "smiling_but_voice_shows_stress",
+    "explanation": "Facial expression appears positive/happy (face valence: +0.93), but vocal tone suggests tension or negativity (audio valence: -0.13). This face-voice mismatch may indicate client is putting on a brave face while experiencing distress.",
+    "snippet": "My name is, wait can I give it lies to? Just say anything.",
+    "metrics": {
+      "text_valence": 0.0,
+      "face_valence": 0.925,
+      "audio_valence": -0.125,
+      "nonverbal_valence": 0.4,
+      "intensity": 0.678
+    }
+  },
+  {
+    "start": 7.0,
+    "end": 10.0,
+    "type": "smiling_but_voice_shows_stress",
+    "explanation": "Facial expression appears positive/happy (face valence: +0.83), but vocal tone suggests tension or negativity (audio valence: -0.13). This face-voice mismatch may indicate client is putting on a brave face while experiencing distress.",
+    "snippet": "Alright, my name is Rob Wazowski. I'm 21 years old.",
+    "metrics": {
+      "text_valence": 0.0,
+      "face_valence": 0.834,
+      "audio_valence": -0.125,
+      "nonverbal_valence": 0.355,
+      "intensity": 0.626
+    }
+  },
+  {
+    "start": 12.0,
+    "end": 13.0,
+    "type": "smiling_but_voice_shows_stress",
+    "explanation": "Facial expression appears positive/happy (face valence: +0.86), but vocal tone suggests tension or negativity (audio valence: -0.13). This face-voice mismatch may indicate client is putting on a brave face while experiencing distress.",
+    "snippet": "I'm 21 years old.",
+    "metrics": {
+      "text_valence": 0.0,
+      "face_valence": 0.857,
+      "audio_valence": -0.125,
+      "nonverbal_valence": 0.366,
+      "intensity": 0.635
+    }
+  }
+]

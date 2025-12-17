@@ -1,0 +1,192 @@
+# Additional dependencies for HIPAA compliance and production deployment
+# Install with: pip install -r requirements-security.txt
+
+# =============================================================================
+# ENCRYPTION & SECURITY
+# =============================================================================
+
+# Encryption (AES-256 via Fernet)
+cryptography>=41.0.0
+
+# Password hashing (bcrypt)
+passlib[bcrypt]>=1.7.4
+
+# JWT authentication
+python-jose[cryptography]>=3.3.0
+
+# =============================================================================
+# AUTHENTICATION & AUTHORIZATION
+# =============================================================================
+
+# HTTP Bearer token support
+fastapi-security>=0.5.0
+
+# OAuth2 integration (if needed)
+authlib>=1.2.0
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+
+# PostgreSQL adapter
+psycopg2-binary>=2.9.7
+
+# ORM
+sqlalchemy>=2.0.0
+alembic>=1.12.0  # Database migrations
+
+# =============================================================================
+# CACHING & SESSION MANAGEMENT
+# =============================================================================
+
+# Redis client
+redis>=5.0.0
+
+# Session management
+itsdangerous>=2.1.0
+
+# =============================================================================
+# DATA VALIDATION & SECURITY
+# =============================================================================
+
+# Email validation
+email-validator>=2.0.0
+
+# Phone number validation
+phonenumbers>=8.13.0
+
+# PII detection (de-identification)
+spacy>=3.7.0
+# Download model: python -m spacy download en_core_web_sm
+
+# URL validation and sanitization
+validators>=0.22.0
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+
+# Structured logging
+python-json-logger>=2.0.7
+
+# Error tracking
+sentry-sdk[fastapi]>=1.38.0
+
+# Metrics
+prometheus-client>=0.19.0
+
+# =============================================================================
+# API SECURITY
+# =============================================================================
+
+# Rate limiting
+slowapi>=0.1.9
+
+# CORS handling (already in fastapi, but explicit version)
+fastapi[all]>=0.104.0
+
+# Request ID tracking
+asgi-correlation-id>=4.2.0
+
+# =============================================================================
+# FILE STORAGE
+# =============================================================================
+
+# AWS S3
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Azure Blob Storage (alternative to S3)
+azure-storage-blob>=12.19.0
+
+# =============================================================================
+# BACKGROUND TASKS & PROCESSING
+# =============================================================================
+
+# Task queue (for async video processing)
+celery[redis]>=5.3.0
+
+# Progress tracking
+tqdm>=4.66.0
+
+# =============================================================================
+# TESTING & SECURITY SCANNING
+# =============================================================================
+
+# Security vulnerability scanning
+# Run: safety check
+safety>=2.3.0
+
+# Dependency license checking
+pip-licenses>=4.3.0
+
+# Code security analysis
+# Run: bandit -r app/
+bandit>=1.7.5
+
+# =============================================================================
+# PRODUCTION SERVER
+# =============================================================================
+
+# ASGI server (already in requirements.txt, but ensure version)
+gunicorn>=21.2.0
+uvicorn[standard]>=0.24.0
+
+# Process management
+supervisor>=4.2.5
+
+# =============================================================================
+# ENVIRONMENT MANAGEMENT
+# =============================================================================
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# =============================================================================
+# COMPLIANCE & AUDITING
+# =============================================================================
+
+# Audit logging with structured format
+audit-log>=0.1.0
+
+# Time-based operations (timezone-aware)
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# =============================================================================
+# DEVELOPMENT TOOLS (Optional)
+# =============================================================================
+
+# Code formatting
+black>=23.11.0
+isort>=5.12.0
+
+# Linting
+pylint>=3.0.0
+flake8>=6.1.0
+
+# Type checking
+mypy>=1.7.0
+
+# =============================================================================
+# DOCUMENTATION
+# =============================================================================
+
+# API documentation (already in FastAPI, but for offline docs)
+mkdocs>=1.5.0
+mkdocs-material>=9.5.0
+
+# =============================================================================
+# NOTES
+# =============================================================================
+
+# After installing, verify no known vulnerabilities:
+# pip install safety
+# safety check --json
+
+# Check dependency licenses (ensure HIPAA-compatible):
+# pip-licenses --format=markdown --output-file=LICENSES.md
+
+# Scan code for security issues:
+# bandit -r app/ -f json -o security-report.json
+

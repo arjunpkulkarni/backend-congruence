@@ -26,6 +26,11 @@ from app.services.congruence_engine import (
     build_congruence_timeline,
     build_session_summary,
 )
+from app.services.simplified_analysis import run_simplified_analysis
+from app.services.simplified_notes import (
+    generate_simplified_notes,
+    save_simplified_outputs,
+)
 from app.utils.paths import (
     get_workspace_root,
     create_session_directories,
@@ -203,6 +208,39 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             transcript_segments_path = os.path.join(outputs_dir, "transcript_segments.json")
             _write_json(transcript_segments_path, transcript_segments)
         logger.info("Wrote enriched timeline and session summary to outputs/")
+        
+        # 9) Run simplified analysis (3-signal approach)
+        logger.info("Running simplified analysis (3 signals)...")
+        try:
+            simplified_results = run_simplified_analysis(
+                merged_timeline=merged_timeline,
+                transcript_segments=transcript_segments,
+                patient_id=payload.patient_id,
+                session_id=session_ts,
+                sessions_root=os.path.join(workspace_root, "sessions")
+            )
+            
+            # Generate simplified therapist notes
+            duration_seconds = len(merged_timeline)  # Approximate from timeline length
+            simplified_notes_md = generate_simplified_notes(
+                analysis_results=simplified_results,
+                patient_id=payload.patient_id,
+                session_id=session_ts,
+                duration=duration_seconds
+            )
+            
+            # Save simplified outputs
+            save_simplified_outputs(
+                analysis_results=simplified_results,
+                notes_markdown=simplified_notes_md,
+                output_dir=outputs_dir
+            )
+            
+            logger.info("Simplified analysis completed and saved")
+        except Exception as exc:
+            logger.exception("Simplified analysis failed (non-critical): %s", exc)
+            # Don't fail the whole request if simplified analysis fails
+        
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
 

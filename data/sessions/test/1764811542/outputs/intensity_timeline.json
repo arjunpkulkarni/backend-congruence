@@ -1,0 +1,205 @@
+[
+  {
+    "t": 0.0,
+    "intensity": 0.14,
+    "face_intensity": 0.033,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 1.0,
+    "intensity": 0.162,
+    "face_intensity": 0.07,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 2.0,
+    "intensity": 0.147,
+    "face_intensity": 0.044,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 3.0,
+    "intensity": 0.707,
+    "face_intensity": 0.978,
+    "vocal_intensity": 0.3,
+    "spike": true
+  },
+  {
+    "t": 4.0,
+    "intensity": 0.711,
+    "face_intensity": 0.985,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 5.0,
+    "intensity": 0.617,
+    "face_intensity": 0.828,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 6.0,
+    "intensity": 0.158,
+    "face_intensity": 0.063,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 7.0,
+    "intensity": 0.504,
+    "face_intensity": 0.641,
+    "vocal_intensity": 0.3,
+    "spike": true
+  },
+  {
+    "t": 8.0,
+    "intensity": 0.584,
+    "face_intensity": 0.773,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 9.0,
+    "intensity": 0.719,
+    "face_intensity": 0.998,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 10.0,
+    "intensity": 0.698,
+    "face_intensity": 0.964,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 11.0,
+    "intensity": 0.456,
+    "face_intensity": 0.559,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 12.0,
+    "intensity": 0.642,
+    "face_intensity": 0.869,
+    "vocal_intensity": 0.3,
+    "spike": true
+  },
+  {
+    "t": 13.0,
+    "intensity": 0.628,
+    "face_intensity": 0.847,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 14.0,
+    "intensity": 0.134,
+    "face_intensity": 0.024,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 15.0,
+    "intensity": 0.509,
+    "face_intensity": 0.648,
+    "vocal_intensity": 0.3,
+    "spike": true
+  },
+  {
+    "t": 16.0,
+    "intensity": 0.372,
+    "face_intensity": 0.419,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 17.0,
+    "intensity": 0.153,
+    "face_intensity": 0.055,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 18.0,
+    "intensity": 0.144,
+    "face_intensity": 0.041,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 19.0,
+    "intensity": 0.124,
+    "face_intensity": 0.006,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 20.0,
+    "intensity": 0.406,
+    "face_intensity": 0.477,
+    "vocal_intensity": 0.3,
+    "spike": true
+  },
+  {
+    "t": 21.0,
+    "intensity": 0.127,
+    "face_intensity": 0.011,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 22.0,
+    "intensity": 0.196,
+    "face_intensity": 0.127,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 23.0,
+    "intensity": 0.148,
+    "face_intensity": 0.046,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 24.0,
+    "intensity": 0.146,
+    "face_intensity": 0.044,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 25.0,
+    "intensity": 0.241,
+    "face_intensity": 0.201,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 26.0,
+    "intensity": 0.174,
+    "face_intensity": 0.09,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 27.0,
+    "intensity": 0.194,
+    "face_intensity": 0.123,
+    "vocal_intensity": 0.3,
+    "spike": false
+  },
+  {
+    "t": 28.0,
+    "intensity": 0.205,
+    "face_intensity": 0.142,
+    "vocal_intensity": 0.3,
+    "spike": false
+  }
+]
