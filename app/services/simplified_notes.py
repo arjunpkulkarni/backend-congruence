@@ -334,3 +334,4 @@ def save_simplified_outputs(
     with open(output_path / "simplified_notes.md", "w") as f:
         f.write(notes_markdown)
 
+

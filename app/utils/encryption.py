@@ -11,10 +11,6 @@ IMPORTANT:
 """
 
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
-from cryptography.hazmat.backends import default_backend
-import base64
 import os
 import json
 from typing import Any, Dict
@@ -243,4 +239,5 @@ encrypted_results = cipher.encrypt_json(session_summary)
 # Decrypt for processing
 cipher.decrypt_file('video.mp4.encrypted', 'video.mp4')
 """
+
 
