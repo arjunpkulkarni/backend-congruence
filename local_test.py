@@ -7,6 +7,10 @@ import sys
 import time
 from typing import Any, Dict
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from app.services.video_processing import (
     extract_audio_with_ffmpeg,
