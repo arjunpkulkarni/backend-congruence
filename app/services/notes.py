@@ -1,27 +1,13 @@
-"""
-Therapist Notes Generation Service
-
-This module generates comprehensive therapist notes from session transcripts
-and analysis data using a separate OpenAI API key.
-"""
-
+import os
 import json
 from typing import Any, Dict, List, Optional
-
-
-# ==============================================================================
-# CONFIGURATION - ADD YOUR NOTES API KEY HERE
-# ==============================================================================
-NOTES_API_KEY = "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"  # ← ADD YOUR OPENAI API KEY HERE
-# ==============================================================================
-
 
 def _get_notes_client():
     """
     Initialize OpenAI client for notes generation using separate API key.
     Returns (client, model) or (None, None) if unavailable.
     """
-    api_key = NOTES_API_KEY
+    api_key = os.getenv("NOTES_API_KEY")
     if not api_key or not api_key.strip():
         return None, None
     
@@ -31,7 +17,7 @@ def _get_notes_client():
         return None, None
     
     client = OpenAI(api_key=api_key.strip())
-    model = "gpt-4o"  # Using GPT-4 for higher quality notes
+    model = "gpt-4o" 
     return client, model
 
 

@@ -54,7 +54,7 @@ def _get_openai_client():
     Lazily import and initialize the OpenAI client if available and key is present.
     Returns (client, model) or (None, None) when unavailable.
     """
-    api_key = "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"
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None, None
     try:
