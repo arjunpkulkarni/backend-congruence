@@ -1,0 +1,46 @@
+name: Run Tests
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run linting
+      run: |
+        pip install flake8 black
+        flake8 app/ --max-line-length=100 --ignore=E203,W503
+        black --check app/
+        
+    - name: Run basic import tests
+      run: |
+        python -c "from app.main import app; print('✅ Main app imports successfully')"
+        python -c "from app.services import analysis, transcription; print('✅ Services import successfully')"
+        
+    - name: Test Docker build
+      run: |
+        docker build -t congruence-test .
+        echo "✅ Docker build successful"

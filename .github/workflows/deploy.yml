@@ -1,0 +1,68 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: ${{ secrets.DROPLET_SSH_KEY }}
+        
+    - name: Add server to known hosts
+      run: |
+        ssh-keyscan -H ${{ secrets.DROPLET_IP }} >> ~/.ssh/known_hosts
+        
+    - name: Deploy to server
+      run: |
+        # Create deployment directory
+        ssh root@${{ secrets.DROPLET_IP }} "mkdir -p /opt/congruence"
+        
+        # Sync code (excluding unnecessary files)
+        rsync -avz --delete \
+          --exclude 'venv/' \
+          --exclude '__pycache__/' \
+          --exclude 'data/sessions/*' \
+          --exclude '.git/' \
+          --exclude '*.pyc' \
+          --exclude '.env' \
+          ./ root@${{ secrets.DROPLET_IP }}:/opt/congruence/
+          
+        # Deploy application
+        ssh root@${{ secrets.DROPLET_IP }} << 'ENDSSH'
+          cd /opt/congruence
+          
+          # Create .env if it doesn't exist
+          if [ ! -f .env ]; then
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+          fi
+          
+          # Create data directories
+          mkdir -p data/sessions data/media
+          
+          # Deploy with Docker
+          docker compose down || true
+          docker compose build --no-cache
+          docker compose up -d
+          
+          # Wait for health check
+          sleep 10
+          curl -f http://localhost:8000/health || exit 1
+          
+          echo "Deployment successful!"
+        ENDSSH
+        
+    - name: Verify deployment
+      run: |
+        sleep 5
+        curl -f http://${{ secrets.DROPLET_IP }}:8000/health
+        echo "✅ Application is running successfully!"
