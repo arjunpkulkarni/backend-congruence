@@ -3,14 +3,12 @@ import json
 import os
 from typing import Any, Dict
 from dotenv import load_dotenv
-
-load_dotenv()
-
 from app.services.llm import (
     analyze_text_emotion_with_llm,
     generate_incongruence_reason,
 )
 
+load_dotenv()
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Test LLM-only functions.")

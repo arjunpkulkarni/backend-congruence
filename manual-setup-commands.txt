@@ -1,0 +1,53 @@
+# Manual Setup Commands for DigitalOcean Droplet
+# Use these commands in the DigitalOcean Console (click "Console" in your droplet dashboard)
+
+# 1. Install Docker
+apt-get update
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# 2. Setup firewall
+ufw allow OpenSSH
+ufw allow 8000/tcp
+ufw --force enable
+
+# 3. Create app directory
+mkdir -p /opt/congruence
+cd /opt/congruence
+
+# 4. Add your SSH key (replace with your actual public key)
+mkdir -p ~/.ssh
+echo "YOUR_SSH_PUBLIC_KEY_HERE" >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+
+# 5. Create a simple deployment script
+cat > deploy-app.sh << 'EOF'
+#!/bin/bash
+cd /opt/congruence
+
+# Pull latest code (you'll upload this manually first)
+echo "Starting deployment..."
+
+# Build and run with Docker
+docker compose down || true
+docker compose build
+docker compose up -d
+
+echo "Deployment complete!"
+echo "API available at: http://159.65.174.46:8000"
+EOF
+
+chmod +x deploy-app.sh
+
+echo "Setup complete! Now upload your code and run ./deploy-app.sh"
