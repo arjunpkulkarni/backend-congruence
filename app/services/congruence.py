@@ -105,13 +105,38 @@ def estimate_text_bins_emotion(
         text_field = e.get("text")
         if isinstance(text_field, dict):
             text_blob = str(text_field.get("text", "")).strip()
-        analysis: Dict[str, Any] = {"valence": 0.0, "arousal": 0.0, "emotions": {}, "rationale": "", "source": "none"}
-        if text_blob:
-            if use_llm:
-                analysis = analyze_text_emotion_with_llm(text_blob)
+        
+        # Default analysis structure
+        analysis: Dict[str, Any] = {
+            "valence": 0.0, 
+            "arousal": 0.0, 
+            "emotions": {}, 
+            "rationale": "", 
+            "source": "none"
+        }
+        
+        if text_blob and use_llm:
+            llm_result = analyze_text_emotion_with_llm(text_blob)
+            if llm_result:
+                # Map LLM result to expected format
+                analysis["valence"] = float(llm_result.get("valence", 0.0))
+                analysis["arousal"] = float(llm_result.get("arousal", 0.0))
+                # Map emotion_distribution to emotions for backward compatibility
+                emotions = llm_result.get("emotion_distribution", {})
+                if emotions:
+                    analysis["emotions"] = emotions
+                analysis["rationale"] = str(llm_result.get("reason", ""))
+                # Extract incongruence reasoning from LLM
+                if llm_result.get("incongruence_reason"):
+                    analysis["incongruence_reason"] = str(llm_result["incongruence_reason"])
+                analysis["source"] = "llm"
             else:
-                # Force heuristic path by telling LLM layer to fallback when no text
-                analysis = analyze_text_emotion_with_llm(text_blob)
+                # LLM failed, use fallback
+                analysis["source"] = "fallback"
+        elif text_blob:
+            # Non-LLM path - could add heuristic analysis here
+            analysis["source"] = "heuristic"
+        
         new_e = dict(e)
         new_e.setdefault("text", {})
         if isinstance(new_e["text"], dict):
@@ -209,26 +234,35 @@ def extract_congruence_events(
     max_events: int = 32,
 ) -> List[Dict[str, Any]]:
     """
-    Pull notable low-congruence moments and attach brief context.
+    Pull notable low-congruence moments and attach brief context with explanations.
     """
     events: List[Dict[str, Any]] = []
+    
     for e in congruence_timeline:
         score = float(e.get("metrics", {}).get("congruence_score", 1.0))
         if score <= score_threshold:
             txt = ""
+            reason = "valence/emotion mismatch"  # default fallback
+            
             if isinstance(e.get("text"), dict):
                 txt = str(e["text"].get("text", ""))[:160]
-            events.append(
-                {
-                    "t": e.get("t", 0),
-                    "congruence_score": score,
-                    "face_top": e.get("metrics", {}).get("face_top", {}),
-                    "audio_top": e.get("metrics", {}).get("audio_top", {}),
-                    "text_top": e.get("metrics", {}).get("text_top", {}),
-                    "snippet": txt,
-                    "spikes": e.get("spikes", []),
-                }
-            )
+                # Get reason from LLM text analysis if available
+                text_analysis = e["text"].get("analysis", {})
+                if text_analysis and text_analysis.get("incongruence_reason"):
+                    reason = text_analysis["incongruence_reason"]
+            
+            metrics = e.get("metrics", {})
+            events.append({
+                "t": e.get("t", 0),
+                "congruence_score": score,
+                "face_top": metrics.get("face_top", {}),
+                "audio_top": metrics.get("audio_top", {}),
+                "text_top": metrics.get("text_top", {}),
+                "snippet": txt,
+                "spikes": e.get("spikes", []),
+                "reason": reason
+            })
+    
     # Sort by ascending score (most incongruent first)
     events.sort(key=lambda x: x.get("congruence_score", 1.0))
     return events[:max_events]

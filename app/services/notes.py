@@ -87,7 +87,7 @@ def generate_therapist_notes(
     
     context = "\n".join(context_parts)
     
-    # System prompt for therapist notes
+    
     system_prompt = """You are an experienced clinical psychologist assistant specializing in therapy session analysis.
 
 Your task is to generate comprehensive, professional therapist notes from session transcripts and emotional analysis data.

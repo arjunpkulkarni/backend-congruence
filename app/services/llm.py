@@ -146,12 +146,18 @@ You may include these at the top level or per speaker:
 - "valence": float ∈ [-1,1]
 - "arousal": float ∈ [0,1]
 - "style": one of "serious", "joking", "sarcastic", "uncertain"
+- "incongruence_reason": string explaining why this text might be incongruent with non-verbal signals (1-2 sentences)
+
+INCONGRUENCE REASONING:
+If the text content might be incongruent with typical non-verbal expressions, include:
+- "incongruence_reason": A brief explanation of potential mismatches between verbal and non-verbal communication
+- Focus on cases where words don't match likely emotional expression (e.g., positive words with negative undertones)
+- Keep it concise and clinical, avoiding speculation
 
 STRICT OUTPUT RULES:
 - **Always return valid JSON.**
 - **No extra text or explanations.**
 - **Do not include any keys not described above.**
-- **Do not include reasoning or chain-of-thought.**
 - The final output must be a pure JSON object.
 
 CONSTRAINTS FOR CONSISTENCY:
@@ -307,6 +313,24 @@ Multiple speakers:
         }
         if first_reason:
             result["reason"] = first_reason
+        
+        # Extract incongruence_reason from any choice
+        first_incongruence_reason = None
+        for choice in (resp.choices or []):
+            content = getattr(choice.message, "content", None)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+                reason = parsed.get("incongruence_reason")
+                if isinstance(reason, str) and reason.strip() and first_incongruence_reason is None:
+                    first_incongruence_reason = reason.strip()
+                    break
+            except Exception:
+                continue
+        
+        if first_incongruence_reason:
+            result["incongruence_reason"] = first_incongruence_reason
         if first_speaker:
             result["speaker"] = first_speaker
         if first_speakers_block is not None:

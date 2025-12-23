@@ -20,5 +20,6 @@ class ProcessSessionResponse(BaseModel):
     notes: Optional[str] = None
     transcript_text: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
+    # Incongruence reasons are included in session_summary.incongruent_moments[].reason
 
 

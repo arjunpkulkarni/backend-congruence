@@ -161,7 +161,9 @@ def run_local_pipeline(
         enriched_timeline_with_text=enriched_timeline, spikes=spikes
     )
     congruence_events = extract_congruence_events(
-        congruence_timeline=congruence_timeline, score_threshold=0.4, max_events=32
+        congruence_timeline=congruence_timeline, 
+        score_threshold=0.4, 
+        max_events=32
     )
 
     # Build 10Hz congruence signal and session summary
@@ -249,6 +251,7 @@ def run_local_pipeline(
         "transcript_segments_count": len(transcript_segments or []),
         "duration_s": duration,
         "session_summary": session_summary,
+        "therapist_notes": therapist_notes,
         "therapist_notes_generated": therapist_notes is not None,
         "therapist_notes_chars": len(therapist_notes) if therapist_notes else 0,
     }

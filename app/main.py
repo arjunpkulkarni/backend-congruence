@@ -31,6 +31,7 @@ from app.services.simplified_notes import (
     generate_simplified_notes,
     save_simplified_outputs,
 )
+from app.services.notes import generate_therapist_notes, save_therapist_notes
 from app.utils.paths import (
     get_workspace_root,
     create_session_directories,
@@ -241,6 +242,27 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             logger.exception("Simplified analysis failed (non-critical): %s", exc)
             # Don't fail the whole request if simplified analysis fails
         
+        # 10) Generate therapist notes (comprehensive clinical notes)
+        therapist_notes = None
+        if transcript_text and locals().get("session_summary"):
+            logger.info("Generating therapist notes...")
+            try:
+                therapist_notes = generate_therapist_notes(
+                    transcript_text=transcript_text,
+                    transcript_segments=transcript_segments,
+                    session_summary=locals().get("session_summary"),
+                    patient_id=payload.patient_id,
+                )
+                if therapist_notes:
+                    # Save therapist notes to file
+                    therapist_notes_path = os.path.join(outputs_dir, "therapist_notes.md")
+                    save_therapist_notes(therapist_notes, therapist_notes_path)
+                    logger.info("Therapist notes generated and saved (%d chars)", len(therapist_notes))
+                else:
+                    logger.info("Therapist notes generation skipped (API key not configured or generation failed)")
+            except Exception as exc:
+                logger.exception("Therapist notes generation failed (non-critical): %s", exc)
+        
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
 
@@ -258,7 +280,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         spikes_json=spikes,
         timeline_10hz=locals().get("congruence_timeline_10hz"),
         session_summary=locals().get("session_summary"),
-        notes="Audio emotion analysis performed with Vesper. Enriched timeline/session_summary written to outputs/.",
+        notes=therapist_notes,
         transcript_text=transcript_text,
         transcript_segments=transcript_segments,
     )

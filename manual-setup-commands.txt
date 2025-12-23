@@ -51,3 +51,5 @@ EOF
 chmod +x deploy-app.sh
 
 echo "Setup complete! Now upload your code and run ./deploy-app.sh"
+
+

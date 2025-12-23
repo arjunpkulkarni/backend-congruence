@@ -36,3 +36,5 @@ echo "1. Upload your application code to /opt/congruence"
 echo "2. Create .env file with OPENAI_API_KEY"
 echo "3. Run: ./deploy.sh docker"
 
+
+

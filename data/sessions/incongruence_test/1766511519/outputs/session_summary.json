@@ -1,0 +1,52 @@
+{
+  "patient_id": "incongruence_test",
+  "session_id": 1766511519,
+  "duration": 28.1,
+  "overall_congruence": 0.7308,
+  "legacy_congruence": 0.1032,
+  "incongruent_moments": [
+    {
+      "start": 2.1,
+      "end": 16.8,
+      "reason": "The speaker's verbal content is incongruent with their facial expressions, as they provide false information about their name while displaying a positive face valence [t: 2.1–16.8 s; text_v: -0.041; face_v: 0.632; audio_v: -0.125]."
+    },
+    {
+      "start": 17.5,
+      "end": 28.0,
+      "reason": "The speaker's verbal content describes wealth and luxury (\"I have a million dollars\"), but their facial expression and tone convey negativity and lack of enthusiasm. This incongruence is evident in the discrepancy between the positive text valence (text_v: 0.025) and the negative face valence (face_v: -0.047) and audio valence (audio_v: -0.125). [t: 17.5–28.0 s; text_v: 0.025; face_v: -0.047; audio_v: -0.125]"
+    }
+  ],
+  "emotion_distribution": {
+    "face": {
+      "joy": 0.3458155354658977,
+      "sadness": 0.03129177495634386,
+      "anger": 0.0064110972603004,
+      "fear": 0.0012251022822620974,
+      "disgust": 2.4863617150740766e-06,
+      "surprise": 0.007747723190241523,
+      "neutral": 0.6075062804832393
+    },
+    "audio": {
+      "joy": 0.050000000000000294,
+      "sadness": 0.050000000000000294,
+      "anger": 0.050000000000000294,
+      "fear": 0.050000000000000294,
+      "disgust": 0.050000000000000294,
+      "surprise": 0.050000000000000294,
+      "neutral": 0.6999999999999982
+    },
+    "text": {
+      "joy": 0.10981481481481456,
+      "sadness": 0.05351851851851888,
+      "anger": 0.03962962962962976,
+      "fear": 0.047888888888889126,
+      "disgust": 0.0324074074074074,
+      "surprise": 0.0941481481481479,
+      "neutral": 0.6225925925925924
+    }
+  },
+  "metrics": {
+    "avg_tecs": 0.7308,
+    "num_incongruent_segments": 2
+  }
+}

@@ -69,3 +69,5 @@ You can also manually trigger deployment:
 - **GitHub Actions**: See deployment status and logs
 - **Application Health**: http://159.65.174.46:8000/health
 - **Server Logs**: SSH into droplet and run `docker compose logs -f`
+
+

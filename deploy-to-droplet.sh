@@ -78,3 +78,5 @@ echo "   ./deploy.sh docker"
 echo ""
 echo "Your API will be available at: http://${DROPLET_IP}:8000"
 
+
+
