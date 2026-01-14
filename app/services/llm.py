@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 _DEFAULT_MODEL = "gpt-4o-mini"
-_FAST_MODEL = "gpt-3.5-turbo"  # Faster, cheaper alternative for batch processing
+_FAST_MODEL = "gpt-3.5-turbo"  
 
 CANONICAL_EMOTIONS = [
     "joy",

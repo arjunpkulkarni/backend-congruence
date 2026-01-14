@@ -1,10 +1,16 @@
 import os
 import json
+import logging
 from typing import Any, Dict, List, Optional
+
+from app.services.llm import analyze_text_emotion_with_llm
+
+logger = logging.getLogger("emotion_api.notes")
+
 
 def _get_notes_client():
     """
-    Initialize OpenAI client for notes generation using separate API key.
+    Get OpenAI client with hardcoded API key for notes generation.
     Returns (client, model) or (None, None) if unavailable.
     """
     api_key = os.getenv("NOTES_API_KEY")
@@ -26,33 +32,95 @@ def generate_therapist_notes(
     transcript_segments: Optional[List[Dict[str, Any]]] = None,
     session_summary: Optional[Dict[str, Any]] = None,
     patient_id: Optional[str] = None,
-) -> Optional[str]:
+) -> Optional[Dict[str, Any]]:
     """
-    Generate comprehensive therapist notes from session transcript and analysis.
+    Generate comprehensive therapist notes from session transcript.
     
-    Args:
-        transcript_text: Full transcript text
-        transcript_segments: List of transcript segments with timestamps
-        session_summary: Session summary with congruence metrics and emotion analysis
-        patient_id: Patient identifier
+    First analyzes the transcript with LLM for emotion/speaker analysis,
+    then uses that enriched context to generate clinical notes.
     
-    Returns:
-        Formatted therapist notes as a string, or None if generation fails
+    Returns a structured dictionary with sections for easy frontend rendering.
     """
-    client, model = _get_notes_client()
+    logger.info("Starting therapist notes generation for patient_id=%s", patient_id)
     
-    if client is None or model is None:
-        # API key not configured - return None silently
+    # Get notes client with hardcoded key
+    notes_client, notes_model = _get_notes_client()
+    
+    if notes_client is None or notes_model is None:
+        logger.warning("Notes OpenAI client not available")
         return None
     
     if not transcript_text or not transcript_text.strip():
+        logger.warning("Empty transcript provided")
         return None
     
-    # Build context from session summary
+    logger.info("Step 1: Analyzing transcript with LLM for emotional content and speaker diarization...")
+    
+    # FIRST CALL: Analyze the transcript with LLM
+    llm_analysis = analyze_text_emotion_with_llm(
+        text=transcript_text,
+        model=None,  # Use default model
+        ensemble_size=1,
+        temperature=0.2,
+    )
+    
+    if llm_analysis:
+        logger.info("LLM transcript analysis completed successfully")
+        logger.info("  - Emotion distribution: %s", llm_analysis.get("emotion_distribution", {}))
+        logger.info("  - Valence: %.3f", llm_analysis.get("valence", 0.0))
+        logger.info("  - Arousal: %.3f", llm_analysis.get("arousal", 0.0))
+        logger.info("  - Style: %s", llm_analysis.get("style", "unknown"))
+        
+        if "speakers" in llm_analysis:
+            logger.info("  - Detected %d speakers", len(llm_analysis["speakers"]))
+            for i, speaker in enumerate(llm_analysis.get("speakers", [])[:3]):  # Log first 3
+                logger.debug("    Speaker %d: %s", i+1, speaker.get("speaker", "unknown"))
+        
+        if "incongruence_reason" in llm_analysis:
+            logger.info("  - Incongruence detected: %s", llm_analysis["incongruence_reason"])
+    else:
+        logger.warning("LLM transcript analysis failed or returned None")
+        
     context_parts = []
     
     if patient_id:
         context_parts.append(f"Patient ID: {patient_id}")
+    
+    # Add LLM analysis results to context
+    if llm_analysis:
+        context_parts.append("\n## LLM Transcript Analysis:")
+        
+        # Add overall emotion distribution
+        emotions = llm_analysis.get("emotion_distribution", {})
+        if emotions:
+            sorted_emotions = sorted(emotions.items(), key=lambda x: x[1], reverse=True)[:3]
+            emotion_str = ", ".join([f"{e}: {v:.2f}" for e, v in sorted_emotions])
+            context_parts.append(f"Overall Emotions: {emotion_str}")
+        
+        # Add valence/arousal/style
+        context_parts.append(f"Valence: {llm_analysis.get('valence', 0.0):.3f} (range: -1 to +1)")
+        context_parts.append(f"Arousal: {llm_analysis.get('arousal', 0.0):.3f} (range: 0 to 1)")
+        context_parts.append(f"Communication Style: {llm_analysis.get('style', 'unknown')}")
+        
+        # Add speaker information if available
+        speakers = llm_analysis.get("speakers", [])
+        if speakers:
+            context_parts.append(f"\nDetected {len(speakers)} speaker(s):")
+            for speaker in speakers:
+                speaker_label = speaker.get("speaker", "Unknown")
+                speaker_text_preview = speaker.get("text", "")[:100]
+                context_parts.append(f"  - {speaker_label}: \"{speaker_text_preview}...\"")
+                
+                # Add speaker-specific emotions if available
+                speaker_emotions = speaker.get("emotion_distribution", {})
+                if speaker_emotions:
+                    sorted_sp_emotions = sorted(speaker_emotions.items(), key=lambda x: x[1], reverse=True)[:2]
+                    sp_emotion_str = ", ".join([f"{e}: {v:.2f}" for e, v in sorted_sp_emotions])
+                    context_parts.append(f"    Emotions: {sp_emotion_str}")
+        
+        # Add incongruence if detected
+        if "incongruence_reason" in llm_analysis:
+            context_parts.append(f"\nIncongruence Note: {llm_analysis['incongruence_reason']}")
     
     if session_summary:
         duration = session_summary.get("duration", 0)
@@ -72,8 +140,7 @@ def generate_therapist_notes(
                 end = moment.get("end", 0)
                 reason = moment.get("reason", "")
                 context_parts.append(f"  {i}. [{start:.1f}s - {end:.1f}s]: {reason}")
-        
-        # Add emotion distribution summary
+               
         emotion_dist = session_summary.get("emotion_distribution", {})
         if emotion_dist:
             context_parts.append("\nEmotion Distribution:")
@@ -87,101 +154,467 @@ def generate_therapist_notes(
     
     context = "\n".join(context_parts)
     
+    logger.info("Step 2: Generating clinical therapist notes with enriched context...")
+    logger.debug("Context includes %d lines of analysis data", len(context_parts))
     
-    system_prompt = """You are an experienced clinical psychologist assistant specializing in therapy session analysis.
+    system_prompt = """You are an experienced clinical documentation assistant for licensed mental health clinicians. Your job is to transform therapy session transcripts PLUS any provided emotional/behavioral signals (e.g., vocal affect markers, facial affect probabilities, arousal/valence trends) into clinically useful progress notes that are **objective, evidence-linked, and actionable**.
 
-Your task is to generate comprehensive, professional therapist notes from session transcripts and emotional analysis data.
+ROLE & SCOPE (IMPORTANT):
+- You do **not** diagnose unless a diagnosis is explicitly provided in the input.
+- You do **not** provide medical advice to the client; you generate documentation for clinician use.
+- You use a trauma-informed, culturally humble, non-stigmatizing style.
+- You do not invent facts. If evidence is missing, say "insufficient evidence".
 
-The notes should include:
+CLINICAL VALUE REQUIREMENTS (DO THIS OR YOUR OUTPUT IS WRONG):
+1) **Evidence anchoring:** Every key theme, concern, strength, shift, and incongruence must be supported by (a) a short quote or paraphrase from transcript AND (b) a timestamp or time-range if available.
+2) **Clinical formulations:** Provide brief hypotheses using structured language (e.g., "may suggest", "consistent with", "could reflect"), and list **alternative explanations** when appropriate.
+3) **Risk & safety:** Always scan for self-harm, suicidality, violence, abuse, substance risk, severe impairment. If not present, explicitly state "No risk indicators identified in provided data". If ambiguous, state what is missing.
+4) **Functional impact:** Note how issues affect functioning (sleep, appetite, work/school, relationships, self-care).
+5) **Interventions:** Extract what the therapist actually did (e.g., reflections, CBT reframes, MI, grounding, psychoeducation). If not present, say "Therapist interventions not clearly evidenced".
+6) **Next steps:** Recommend future focus areas and interventions that logically follow from evidence, including measurable targets when possible.
 
-1. **SESSION OVERVIEW**
-   - Brief summary of session duration and overall tone
-   - Patient engagement and participation level
+MULTI-MODAL EMOTION RULES:
+- If emotional analysis data is provided, integrate it; if absent, rely only on transcript.
+- Distinguish **verbal content** from **observed affect** (vocal/facial) and note congruence.
+- Incongruence moments must include: timestamp, exact verbal line (or close paraphrase), nonverbal signal description, and why it matters clinically.
 
-2. **KEY THEMES & TOPICS**
-   - Main topics discussed during the session
-   - Recurring themes or patterns
-   - Important statements or revelations
+CONFIDENTIALITY & MINIMUM NECESSARY:
+- Remove or mask identifying details (names, addresses, employers, phone numbers). Use [CLIENT], [THERAPIST], [PARTNER], etc.
+- Do not include gratuitous detail unrelated to clinical care.
 
-3. **EMOTIONAL ANALYSIS**
-   - Predominant emotions observed (from transcript, facial expressions, and vocal tone)
-   - Emotional shifts or notable changes during the session
-   - Incongruent moments where verbal and non-verbal communication didn't align
+OUTPUT FORMAT (STRICT):
+- You MUST return ONLY valid JSON with the exact schema below.
+- Do not include markdown, commentary, or extra keys.
+- Use double quotes for all strings. No trailing commas.
 
-4. **CLINICAL OBSERVATIONS**
-   - Notable behavioral patterns
-   - Potential areas of concern
-   - Strengths and coping mechanisms observed
+QUALITY CHECK BEFORE YOU OUTPUT:
+- Did you include timestamps wherever possible?
+- Did you avoid diagnosis unless provided?
+- Did you avoid invented content?
+- Did you include risk scan + functional impact?
+- Did each theme have evidence?
 
-5. **RECOMMENDATIONS**
-   - Topics to explore in future sessions
-   - Therapeutic interventions to consider
-   - Follow-up actions
+JSON SCHEMA:
+{
+  "session_overview": {
+    "summary": "2-3 sentence clinical summary focusing on presenting concerns + session work + outcome",
+    "duration": "e.g., 50 minutes (or 'unknown')",
+    "engagement_level": "behavioral indicators of engagement (e.g., responsive, guarded, reflective)",
+    "overall_tone": "brief emotional tone characterization"
+  },
+  "key_themes": [
+    {
+      "theme": "Theme name",
+      "description": "Clinically framed description of the theme and its functional impact",
+      "evidence": ["[timestamp] short quote/paraphrase", "[timestamp] short quote/paraphrase"]
+    }
+  ],
+  "emotional_analysis": {
+    "predominant_emotions": [
+      {
+        "emotion": "Emotion label",
+        "source": "text|facial|vocal|mixed",
+        "intensity": "low|medium|high",
+        "context": "What was happening + evidence"
+      }
+    ],
+    "emotional_shifts": [
+      {
+        "timestamp": "Time in session",
+        "from_emotion": "Prior state",
+        "to_emotion": "New state",
+        "trigger": "Transcript-linked trigger"
+      }
+    ],
+    "incongruence_moments": [
+      {
+        "timestamp": "Time in session",
+        "verbal": "Exact quote or close paraphrase",
+        "nonverbal": "Observed affect/tone markers",
+        "significance": "Why this might matter clinically + alternative explanations"
+      }
+    ]
+  },
+  "clinical_observations": {
+    "behavioral_patterns": ["Observed pattern + evidence pointer"],
+    "areas_of_concern": ["Concern + functional impact + evidence pointer"],
+    "strengths_and_coping": ["Strength/coping strategy + evidence pointer"]
+  },
+  "risk_assessment": {
+    "suicide_self_harm": {
+      "indicators": "present|absent|unclear",
+      "evidence": "Evidence or 'not indicated in provided data'",
+      "protective_factors": ["If present, list"],
+      "recommended_actions": ["If present/unclear: clinician actions"]
+    },
+    "harm_to_others": {
+      "indicators": "present|absent|unclear",
+      "evidence": "Evidence or 'not indicated in provided data'",
+      "recommended_actions": ["If present/unclear"]
+    },
+    "substance_use": {
+      "indicators": "present|absent|unclear",
+      "evidence": "Evidence or 'not indicated in provided data'",
+      "recommended_actions": ["If present/unclear"]
+    }
+  },
+  "recommendations": {
+    "future_topics": ["Clinically appropriate next topics tied to evidence"],
+    "interventions": ["Potential interventions (CBT/ACT/MI/DBT/trauma-informed) matched to issues"],
+    "follow_up_actions": ["Concrete steps / homework / referrals if relevant"]
+  },
+  "interaction_dynamics": {
+    "therapist_approach": "What therapist did (techniques), with evidence if possible",
+    "client_responsiveness": "How client responded (e.g., receptive, resistant), with evidence",
+    "rapport_quality": "Brief alliance assessment grounded in observed interaction"
+  }
+}
 
-**IMPORTANT GUIDELINES:**
-- Write in professional, clinical language suitable for medical records
-- Be objective and evidence-based in observations
-- Maintain patient confidentiality and dignity
-- Use precise terminology appropriate for mental health professionals
-- Include timestamps for significant moments when relevant
-- Be concise but comprehensive (aim for 500-800 words)
-- If speakers are identified (Therapist/Client), note interaction dynamics
+Remember: output ONLY JSON matching the schema. If transcript lacks timestamps, infer approximate sequence (early/mid/late) and state "timestamp unavailable"."""
 
-Format the notes clearly with markdown headers and bullet points for readability."""
+    # Prepare emotional/multimodal data summary
+    emotion_data_summary = []
+    if llm_analysis:
+        emotion_data_summary.append("LLM Transcript Analysis Results:")
+        emotion_data_summary.append(f"- Emotion distribution: {llm_analysis.get('emotion_distribution', {})}")
+        emotion_data_summary.append(f"- Valence: {llm_analysis.get('valence', 0.0):.3f}")
+        emotion_data_summary.append(f"- Arousal: {llm_analysis.get('arousal', 0.0):.3f}")
+        emotion_data_summary.append(f"- Communication style: {llm_analysis.get('style', 'unknown')}")
+        if "speakers" in llm_analysis:
+            emotion_data_summary.append(f"- Speakers detected: {len(llm_analysis['speakers'])}")
+        if "incongruence_reason" in llm_analysis:
+            emotion_data_summary.append(f"- Incongruence flagged: {llm_analysis['incongruence_reason']}")
+    
+    if session_summary:
+        emotion_data_summary.append("\nSession Emotion Distribution:")
+        emotion_dist = session_summary.get("emotion_distribution", {})
+        for modality in ["text", "face", "audio"]:
+            if modality in emotion_dist:
+                emotion_data_summary.append(f"- {modality}: {emotion_dist[modality]}")
+    
+    emotion_data_text = "\n".join(emotion_data_summary) if emotion_data_summary else "None provided"
+    
+    # Determine duration
+    duration_str = "unknown"
+    if session_summary and "duration" in session_summary:
+        duration_seconds = session_summary.get("duration", 0)
+        duration_str = f"{duration_seconds:.0f} seconds (~{duration_seconds/60:.1f} minutes)"
+    
+    # Check for timestamps and speakers
+    has_timestamps = bool(transcript_segments)
+    has_speakers = bool(llm_analysis and llm_analysis.get("speakers"))
+    
+    emotion_types = []
+    if llm_analysis:
+        emotion_types.append("LLM text analysis")
+    if session_summary and "emotion_distribution" in session_summary:
+        if "face" in session_summary["emotion_distribution"]:
+            emotion_types.append("facial affect")
+        if "audio" in session_summary["emotion_distribution"]:
+            emotion_types.append("vocal affect")
+    
+    user_content = f"""Generate clinician-facing therapy progress notes using the system instructions.
 
-    user_content = f"""Generate therapist notes for this session.
+INPUTS PROVIDED:
+- Session duration: {duration_str}
+- Timestamps available: {"yes" if has_timestamps else "no"}
+- Speakers labeled: {"yes" if has_speakers else "no"}
+- Emotional signals provided: {', '.join(emotion_types) if emotion_types else 'none'}
 
 SESSION CONTEXT:
 {context}
 
-FULL TRANSCRIPT:
+TRANSCRIPT:
 {transcript_text}
 
-Please generate comprehensive therapist notes following the format specified."""
+EMOTIONAL / MULTIMODAL DATA (if any):
+{emotion_data_text}
+
+CONSTRAINTS:
+- If something is not in the transcript or data, write "insufficient evidence".
+- Mask identifying details.
+- Include evidence pointers for every key claim.
+
+Return ONLY valid JSON."""
 
     try:
-        response = client.chat.completions.create(
-            model=model,
+        logger.info("Calling OpenAI API (model: %s) for therapist notes generation...", notes_model)
+        logger.debug("System prompt: %d chars, User content: %d chars", 
+                    len(system_prompt), len(user_content))
+        
+        response = notes_client.chat.completions.create(
+            model=notes_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
             temperature=0.3,  # Lower temperature for more consistent, professional output
-            max_tokens=2000,  # Allow for comprehensive notes
+            max_tokens=2500,  # Allow for comprehensive structured notes
+            response_format={"type": "json_object"}  # Force JSON response
         )
         
-        notes = response.choices[0].message.content
-        return notes.strip() if notes else None
+        logger.info("OpenAI API call successful")
+        
+        notes_text = response.choices[0].message.content
+        if not notes_text:
+            logger.warning("OpenAI returned empty notes content")
+            return None
+        
+        # Parse the JSON response
+        try:
+            notes_dict = json.loads(notes_text)
+            logger.info("Therapist notes generated successfully (structured JSON with %d top-level keys)", 
+                       len(notes_dict))
+            logger.debug("Notes sections: %s", list(notes_dict.keys()))
+            return notes_dict
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse notes JSON: %s", e)
+            logger.debug("Raw response: %s", notes_text[:500])
+            # Return as fallback plain text in a structured format
+            return {
+                "error": "Failed to parse structured notes",
+                "raw_content": notes_text,
+                "format": "fallback"
+            }
         
     except Exception as e:
-        # Log error but don't fail the pipeline
-        print(f"Warning: Failed to generate therapist notes: {e}")
+        logger.exception("Failed to generate therapist notes: %s", e)
         return None
 
 
 def save_therapist_notes(
-    notes: Optional[str],
+    notes: Optional[Dict[str, Any]],
     output_path: str,
 ) -> bool:
     """
     Save therapist notes to a file.
     
     Args:
-        notes: Generated notes text
+        notes: Generated notes dictionary (structured format)
         output_path: Path to save the notes file
     
     Returns:
         True if successful, False otherwise
     """
     if not notes:
+        logger.warning("Cannot save therapist notes: notes content is empty")
         return False
     
     try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(notes)
+        logger.info("Saving therapist notes to: %s", output_path)
+        
+        # Convert structured notes to readable markdown for file storage
+        markdown_content = _convert_notes_to_markdown(notes)
+        
+        # Save both markdown and JSON versions
+        md_path = output_path.replace('.json', '.md') if output_path.endswith('.json') else output_path
+        json_path = output_path.replace('.md', '.json') if output_path.endswith('.md') else output_path.replace('.md', '') + '.json'
+        
+        # Save markdown version
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        
+        # Save JSON version
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(notes, f, ensure_ascii=False, indent=2)
+        
+        logger.info("Therapist notes saved successfully (markdown: %d bytes, json: %d bytes)", 
+                   len(markdown_content), len(json.dumps(notes)))
         return True
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to save therapist notes: %s", e)
         return False
+
+
+def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
+    """
+    Convert structured notes dictionary to readable markdown format.
+    """
+    lines = ["# Therapist Session Notes", ""]
+    
+    # Handle error/fallback format
+    if notes.get("format") == "fallback":
+        lines.append("**Note:** This is a fallback format due to parsing issues.")
+        lines.append("")
+        lines.append(notes.get("raw_content", "No content available"))
+        return "\n".join(lines)
+    
+    # Session Overview
+    if "session_overview" in notes:
+        overview = notes["session_overview"]
+        lines.append("## Session Overview")
+        lines.append("")
+        if "summary" in overview:
+            lines.append(overview["summary"])
+            lines.append("")
+        if "duration" in overview:
+            lines.append(f"**Duration:** {overview['duration']}")
+        if "engagement_level" in overview:
+            lines.append(f"**Engagement Level:** {overview['engagement_level']}")
+        if "overall_tone" in overview:
+            lines.append(f"**Overall Tone:** {overview['overall_tone']}")
+        lines.append("")
+    
+    # Key Themes
+    if "key_themes" in notes and notes["key_themes"]:
+        lines.append("## Key Themes & Topics")
+        lines.append("")
+        for i, theme in enumerate(notes["key_themes"], 1):
+            lines.append(f"### {i}. {theme.get('theme', 'Unnamed Theme')}")
+            lines.append("")
+            if "description" in theme:
+                lines.append(theme["description"])
+                lines.append("")
+            if "evidence" in theme and theme["evidence"]:
+                lines.append("**Evidence:**")
+                for evidence in theme["evidence"]:
+                    lines.append(f"- {evidence}")
+                lines.append("")
+    
+    # Emotional Analysis
+    if "emotional_analysis" in notes:
+        ea = notes["emotional_analysis"]
+        lines.append("## Emotional Analysis")
+        lines.append("")
+        
+        if "predominant_emotions" in ea and ea["predominant_emotions"]:
+            lines.append("### Predominant Emotions")
+            lines.append("")
+            for emotion in ea["predominant_emotions"]:
+                lines.append(f"**{emotion.get('emotion', 'Unknown')}** ({emotion.get('source', 'unknown')} - {emotion.get('intensity', 'unknown')} intensity)")
+                if "context" in emotion:
+                    lines.append(f"- {emotion['context']}")
+                lines.append("")
+        
+        if "emotional_shifts" in ea and ea["emotional_shifts"]:
+            lines.append("### Emotional Shifts")
+            lines.append("")
+            for shift in ea["emotional_shifts"]:
+                lines.append(f"**[{shift.get('timestamp', 'Unknown time')}]** {shift.get('from_emotion', '?')} → {shift.get('to_emotion', '?')}")
+                if "trigger" in shift:
+                    lines.append(f"- Trigger: {shift['trigger']}")
+                lines.append("")
+        
+        if "incongruence_moments" in ea and ea["incongruence_moments"]:
+            lines.append("### Incongruence Moments")
+            lines.append("")
+            for moment in ea["incongruence_moments"]:
+                lines.append(f"**[{moment.get('timestamp', 'Unknown time')}]**")
+                if "verbal" in moment:
+                    lines.append(f"- Verbal: {moment['verbal']}")
+                if "nonverbal" in moment:
+                    lines.append(f"- Non-verbal: {moment['nonverbal']}")
+                if "significance" in moment:
+                    lines.append(f"- Significance: {moment['significance']}")
+                lines.append("")
+    
+    # Clinical Observations
+    if "clinical_observations" in notes:
+        co = notes["clinical_observations"]
+        lines.append("## Clinical Observations")
+        lines.append("")
+        
+        if "behavioral_patterns" in co and co["behavioral_patterns"]:
+            lines.append("### Behavioral Patterns")
+            for pattern in co["behavioral_patterns"]:
+                lines.append(f"- {pattern}")
+            lines.append("")
+        
+        if "areas_of_concern" in co and co["areas_of_concern"]:
+            lines.append("### Areas of Concern")
+            for concern in co["areas_of_concern"]:
+                lines.append(f"- {concern}")
+            lines.append("")
+        
+        if "strengths_and_coping" in co and co["strengths_and_coping"]:
+            lines.append("### Strengths & Coping Mechanisms")
+            for strength in co["strengths_and_coping"]:
+                lines.append(f"- {strength}")
+            lines.append("")
+    
+    # Risk Assessment
+    if "risk_assessment" in notes:
+        risk = notes["risk_assessment"]
+        lines.append("## Risk Assessment")
+        lines.append("")
+        
+        if "suicide_self_harm" in risk:
+            ssh = risk["suicide_self_harm"]
+            lines.append("### Suicide/Self-Harm Risk")
+            lines.append(f"**Indicators:** {ssh.get('indicators', 'unclear')}")
+            lines.append(f"**Evidence:** {ssh.get('evidence', 'none provided')}")
+            if ssh.get("protective_factors"):
+                lines.append("**Protective Factors:**")
+                for factor in ssh["protective_factors"]:
+                    lines.append(f"- {factor}")
+            if ssh.get("recommended_actions"):
+                lines.append("**Recommended Actions:**")
+                for action in ssh["recommended_actions"]:
+                    lines.append(f"- {action}")
+            lines.append("")
+        
+        if "harm_to_others" in risk:
+            hto = risk["harm_to_others"]
+            lines.append("### Harm to Others Risk")
+            lines.append(f"**Indicators:** {hto.get('indicators', 'unclear')}")
+            lines.append(f"**Evidence:** {hto.get('evidence', 'none provided')}")
+            if hto.get("recommended_actions"):
+                lines.append("**Recommended Actions:**")
+                for action in hto["recommended_actions"]:
+                    lines.append(f"- {action}")
+            lines.append("")
+        
+        if "substance_use" in risk:
+            su = risk["substance_use"]
+            lines.append("### Substance Use Risk")
+            lines.append(f"**Indicators:** {su.get('indicators', 'unclear')}")
+            lines.append(f"**Evidence:** {su.get('evidence', 'none provided')}")
+            if su.get("recommended_actions"):
+                lines.append("**Recommended Actions:**")
+                for action in su["recommended_actions"]:
+                    lines.append(f"- {action}")
+            lines.append("")
+    
+    # Recommendations
+    if "recommendations" in notes:
+        rec = notes["recommendations"]
+        lines.append("## Recommendations")
+        lines.append("")
+        
+        if "future_topics" in rec and rec["future_topics"]:
+            lines.append("### Future Topics to Explore")
+            for topic in rec["future_topics"]:
+                lines.append(f"- {topic}")
+            lines.append("")
+        
+        if "interventions" in rec and rec["interventions"]:
+            lines.append("### Therapeutic Interventions")
+            for intervention in rec["interventions"]:
+                lines.append(f"- {intervention}")
+            lines.append("")
+        
+        if "follow_up_actions" in rec and rec["follow_up_actions"]:
+            lines.append("### Follow-up Actions")
+            for action in rec["follow_up_actions"]:
+                lines.append(f"- {action}")
+            lines.append("")
+    
+    # Interaction Dynamics
+    if "interaction_dynamics" in notes:
+        dynamics = notes["interaction_dynamics"]
+        lines.append("## Interaction Dynamics")
+        lines.append("")
+        if "therapist_approach" in dynamics:
+            lines.append(f"**Therapist Approach:** {dynamics['therapist_approach']}")
+            lines.append("")
+        if "client_responsiveness" in dynamics:
+            lines.append(f"**Client Responsiveness:** {dynamics['client_responsiveness']}")
+            lines.append("")
+        if "rapport_quality" in dynamics:
+            lines.append(f"**Rapport Quality:** {dynamics['rapport_quality']}")
+            lines.append("")
+    
+    return "\n".join(lines)
 
 
 

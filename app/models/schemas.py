@@ -17,7 +17,7 @@ class ProcessSessionResponse(BaseModel):
     # Optional enriched outputs for direct API consumption
     timeline_10hz: Optional[List[Dict[str, Any]]] = None
     session_summary: Optional[Dict[str, Any]] = None
-    notes: Optional[str] = None
+    notes: Optional[Dict[str, Any]] = None  # Structured therapist notes (JSON format)
     transcript_text: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
     # Incongruence reasons are included in session_summary.incongruent_moments[].reason
