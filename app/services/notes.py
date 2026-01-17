@@ -13,7 +13,7 @@ def _get_notes_client():
     Get OpenAI client with hardcoded API key for notes generation.
     Returns (client, model) or (None, None) if unavailable.
     """
-    api_key = os.getenv("NOTES_API_KEY")
+    api_key = "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"
     if not api_key or not api_key.strip():
         return None, None
     
@@ -33,17 +33,9 @@ def generate_therapist_notes(
     session_summary: Optional[Dict[str, Any]] = None,
     patient_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Generate comprehensive therapist notes from session transcript.
-    
-    First analyzes the transcript with LLM for emotion/speaker analysis,
-    then uses that enriched context to generate clinical notes.
-    
-    Returns a structured dictionary with sections for easy frontend rendering.
-    """
+
     logger.info("Starting therapist notes generation for patient_id=%s", patient_id)
     
-    # Get notes client with hardcoded key
     notes_client, notes_model = _get_notes_client()
     
     if notes_client is None or notes_model is None:
