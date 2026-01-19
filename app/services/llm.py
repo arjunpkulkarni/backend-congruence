@@ -54,7 +54,7 @@ def _get_openai_client():
     Lazily import and initialize the OpenAI client if available and key is present.
     Returns (client, model) or (None, None) when unavailable.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = "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"
     if not api_key:
         return None, None
     try:
@@ -484,16 +484,18 @@ def generate_incongruence_reason(
         "- Prefer concrete observations over speculation; do not invent cues.\n"
         "- Keep a neutral, precise tone. Avoid generic phrasing.\n"
         "- 1–2 sentences only.\n"
-        "- End with a compact bracket summarizing metrics, and include the time range if provided in metrics as 'start'/'end': "
+        "- End with a compact bracket summarizing metrics, and include the time range "
+        "if provided in metrics as 'start'/'end': "
         "[t: <start>–<end> s; text_v: <x.xxx>; face_v: <y.yyy>; audio_v: <z.zzz>]."
     )
 
     user_msg = (
         f"Transcript snippet:\n\"\"\"\n{snippet_use}\n\"\"\"\n\n"
         f"Metrics (JSON): {metrics_json}\n\n"
-        "Task: Provide a single concise detective-style reason (1–2 sentences) comparing modalities explicitly, "
-        "citing numeric mean valences with 3 decimals and ending with the bracket summary. "
-        "If insufficient information, respond exactly with: \"Insufficient information.\""
+        "Task: Provide a single concise detective-style reason (1–2 sentences) "
+        "comparing modalities explicitly, citing numeric mean valences with 3 decimals "
+        "and ending with the bracket summary. If insufficient information, respond "
+        "exactly with: \"Insufficient information.\""
     )
 
     try:

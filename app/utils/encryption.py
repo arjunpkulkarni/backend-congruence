@@ -47,10 +47,8 @@ class PHIEncryption:
         """
         if isinstance(master_key, str):
             master_key = master_key.encode('utf-8')
-        
         try:
-            self.cipher = Fernet(master_key)
-        except Exception as e:
+            self.cipher = Fernet(master_key)        except Exception as e:
             raise ValueError(f"Invalid encryption key: {e}")
     
     @staticmethod
@@ -67,7 +65,7 @@ class PHIEncryption:
             'abcd1234...' (44 characters)
         """
         return Fernet.generate_key()
-    
+
     def encrypt_file(self, input_path: str, output_path: str) -> None:
         """
         Encrypt a file (video, audio, image, etc.)
@@ -88,12 +86,9 @@ class PHIEncryption:
             
             with open(output_path, 'wb') as f:
                 f.write(encrypted)
-        
         except FileNotFoundError:
-            raise FileNotFoundError(f"Input file not found: {input_path}")
-        except Exception as e:
+            raise FileNotFoundError(f"Input file not found: {input_path}")        except Exception as e:
             raise IOError(f"Encryption failed: {e}")
-    
     def decrypt_file(self, input_path: str, output_path: str) -> None:
         """
         Decrypt a file for processing.
@@ -114,12 +109,9 @@ class PHIEncryption:
             
             with open(output_path, 'wb') as f:
                 f.write(decrypted)
-        
         except FileNotFoundError:
-            raise FileNotFoundError(f"Input file not found: {input_path}")
-        except Exception as e:
+            raise FileNotFoundError(f"Input file not found: {input_path}")        except Exception as e:
             raise IOError(f"Decryption failed (wrong key or corrupted data): {e}")
-    
     def encrypt_json(self, data: Dict[str, Any]) -> bytes:
         """
         Encrypt JSON-serializable data (session summaries, analysis results, etc.)
@@ -138,10 +130,9 @@ class PHIEncryption:
         """
         try:
             json_str = json.dumps(data, ensure_ascii=False).encode('utf-8')
-            return self.cipher.encrypt(json_str)
-        except Exception as e:
+            return self.cipher.encrypt(json_str)        except Exception as e:
             raise ValueError(f"Encryption failed: {e}")
-    
+
     def decrypt_json(self, encrypted: bytes) -> Dict[str, Any]:
         """
         Decrypt JSON data.
@@ -158,10 +149,9 @@ class PHIEncryption:
         """
         try:
             decrypted = self.cipher.decrypt(encrypted)
-            return json.loads(decrypted.decode('utf-8'))
-        except Exception as e:
+            return json.loads(decrypted.decode('utf-8'))        except Exception as e:
             raise ValueError(f"Decryption failed: {e}")
-    
+
     def encrypt_string(self, text: str) -> bytes:
         """
         Encrypt a string (patient ID, name, etc.)
@@ -173,7 +163,7 @@ class PHIEncryption:
             Encrypted bytes
         """
         return self.cipher.encrypt(text.encode('utf-8'))
-    
+
     def decrypt_string(self, encrypted: bytes) -> str:
         """
         Decrypt a string.
@@ -201,25 +191,27 @@ def setup_encryption() -> PHIEncryption:
         RuntimeError: If no key found and not in development mode
     """
     key = os.environ.get('MASTER_ENCRYPTION_KEY')
-    
+
     if not key:
         # In production, this should raise an error
         if os.environ.get('ENVIRONMENT') == 'production':
             raise RuntimeError(
                 "MASTER_ENCRYPTION_KEY not set in production environment! "
-                "Store encryption key in secure key management system (AWS KMS, Azure Key Vault, etc.)"
+                "Store encryption key in secure key management system "
+                "(AWS KMS, Azure Key Vault, etc.)"
             )
-        
+
         # Development only: generate a temporary key
         import warnings
         warnings.warn(
-            "No MASTER_ENCRYPTION_KEY found. Generating temporary key for development. "
-            "This key will not persist across restarts. DO NOT USE IN PRODUCTION!",
+            "No MASTER_ENCRYPTION_KEY found. Generating temporary key for "
+            "development. This key will not persist across restarts. "
+            "DO NOT USE IN PRODUCTION!",
             UserWarning
         )
         key = PHIEncryption.generate_key().decode()
         os.environ['MASTER_ENCRYPTION_KEY'] = key
-    
+
     return PHIEncryption(key.encode('utf-8'))
 
 
@@ -239,5 +231,3 @@ encrypted_results = cipher.encrypt_json(session_summary)
 # Decrypt for processing
 cipher.decrypt_file('video.mp4.encrypted', 'video.mp4')
 """
-
-

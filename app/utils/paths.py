@@ -30,4 +30,3 @@ def create_session_directories(
     os.makedirs(outputs_dir, exist_ok=True)
     return session_dir, media_dir, frames_dir, outputs_dir
 
-
