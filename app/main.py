@@ -50,6 +50,13 @@ if not logger.handlers:
 
 app = FastAPI(title="Emotion Analysis API", version="0.1.0")
 
+# Log API key status on startup
+api_key = os.getenv("OPENAI_API_KEY")
+logger.info("OPENAI_API_KEY present: %s", bool(api_key))
+if api_key:
+    logger.info("OPENAI_API_KEY length: %d chars", len(api_key))
+    logger.info("OPENAI_MODEL: %s", os.getenv("OPENAI_MODEL", "gpt-4o-mini (default)"))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,6 +69,34 @@ app.add_middleware(
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/config/api-key-status")
+def api_key_status() -> Dict[str, any]:
+    """
+    Check if OpenAI API key is configured (safe for frontend to call).
+    Returns masked key preview for verification without exposing full key.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    
+    if not api_key:
+        return {
+            "configured": False,
+            "present": False,
+            "message": "OPENAI_API_KEY not configured"
+        }
+    
+    # Show only first 7 and last 4 characters for verification
+    masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 11 else "***"
+    
+    return {
+        "configured": True,
+        "present": True,
+        "key_preview": masked_key,
+        "key_length": len(api_key),
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "message": "OpenAI API key is configured"
+    }
 
 
 @app.post("/process_session", response_model=ProcessSessionResponse)
