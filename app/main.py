@@ -71,7 +71,7 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/config/api-key-status")
+@app.get("/api-key-status")
 def api_key_status() -> Dict[str, any]:
     """
     Check if OpenAI API key is configured (safe for frontend to call).
