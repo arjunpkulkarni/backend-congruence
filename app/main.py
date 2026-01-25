@@ -6,7 +6,7 @@ import logging
 import contextlib
 import glob
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models.schemas import ProcessSessionRequest, ProcessSessionResponse
@@ -71,12 +71,26 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.options("/api-key-status")
+def api_key_status_options():
+    """Handle CORS preflight request"""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @app.get("/api-key-status")
 def api_key_status() -> Dict[str, Any]:
     """
     Check if OpenAI API key is configured (safe for frontend to call).
     Returns masked key preview for verification without exposing full key.
     """
+    logger.info("API key status endpoint called")
     api_key = os.getenv("OPENAI_API_KEY")
     
     if not api_key:
