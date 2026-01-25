@@ -1,39 +1,15 @@
-"""
-Simplified Analysis: 3 Core Clinical Signals
-
-This module implements a therapist-friendly analysis system with only 3 signals:
-1. Emotional Intensity Timeline - continuous intensity without emotion labels
-2. Incongruence Markers - timestamped moments of valence/arousal mismatch
-3. Repetition/Stuckness Indicators - pattern similarity across sessions
-
-No complex emotion theory. No predictions. Just observable signals.
-"""
-
 from typing import Any, Dict, List, Optional, Tuple
 import math
 import json
 import os
 from pathlib import Path
 
-
-# =============================================================================
-# SIGNAL 1: EMOTIONAL INTENSITY TIMELINE
-# =============================================================================
-
-def compute_facial_intensity(face_emotions: Dict[str, float]) -> float:
-    """
-    Compute facial emotional intensity as 1 - neutral.
-    Higher value = more emotional activation, regardless of type.
-    """
+def compute_facial_intensity(face_emotions: Dict[str, float]) -> float:    
     neutral = float(face_emotions.get("neutral", 0.0))
     return max(0.0, min(1.0, 1.0 - neutral))
 
 
-def compute_vocal_intensity(audio_emotions: Dict[str, float]) -> float:
-    """
-    Compute vocal emotional intensity as 1 - neutral.
-    In practice, could also use prosody features (pitch variance, volume, etc.)
-    """
+def compute_vocal_intensity(audio_emotions: Dict[str, float]) -> float:   
     neutral = float(audio_emotions.get("neutral", 0.0))
     return max(0.0, min(1.0, 1.0 - neutral))
 
@@ -44,22 +20,12 @@ def compute_combined_intensity(
     face_weight: float = 0.6,
     vocal_weight: float = 0.4
 ) -> float:
-    """
-    Combine facial tension and vocal intensity into single physiological intensity signal.
-    Face weighted slightly higher as it's often more reliable.
-    """
     return face_weight * face_intensity + vocal_weight * vocal_intensity
 
 
 def build_intensity_timeline(
     merged_timeline: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    """
-    Build a simple intensity timeline from face + audio signals.
-    
-    Returns:
-        List of {"t": seconds, "intensity": 0.0-1.0, "spike": bool}
-    """
     timeline = []
     prev_intensity = None
     
@@ -72,11 +38,10 @@ def build_intensity_timeline(
         vocal_int = compute_vocal_intensity(audio)
         combined_int = compute_combined_intensity(face_int, vocal_int)
         
-        # Detect intensity spikes (rapid increases)
         is_spike = False
         if prev_intensity is not None:
             intensity_jump = combined_int - prev_intensity
-            if intensity_jump > 0.15:  # 15% jump in intensity
+            if intensity_jump > 0.15:  
                 is_spike = True
         
         timeline.append({
@@ -92,18 +57,7 @@ def build_intensity_timeline(
     return timeline
 
 
-# =============================================================================
-# SIGNAL 2: INCONGRUENCE MARKERS
-# =============================================================================
-
-def compute_valence(emotion_dist: Dict[str, float]) -> float:
-    """
-    Compute valence (positive/negative) from emotion distribution.
-    Returns value in range [-1, 1] where:
-        +1 = very positive (joy, surprise)
-        -1 = very negative (sadness, anger, fear, disgust)
-         0 = neutral
-    """
+def compute_valence(emotion_dist: Dict[str, float]) -> float:    
     joy = float(emotion_dist.get("joy", 0.0))
     surprise = float(emotion_dist.get("surprise", 0.0))
     sadness = float(emotion_dist.get("sadness", 0.0))
@@ -125,38 +79,24 @@ def detect_valence_mismatch(
     has_text: bool = True,
     threshold: float = 0.4
 ) -> Tuple[bool, str]:
-    """
-    Detect incongruence: verbal positivity/negativity doesn't match physiology.
-    
-    Returns:
-        (is_incongruent, reason_type)
-    """
     # Only flag if there's meaningful emotional intensity
     if intensity < 0.15:
         return False, ""
     
-    # Average non-verbal valence
     nonverbal_valence = 0.5 * (face_valence + audio_valence)
     
-    # If we have text, check text-based incongruence
-    if has_text and abs(text_valence) > 0.1:  # Only if text has meaningful valence
-        # Type 1: Positive words, negative body/voice (classic "I'm fine" when not fine)
+    if has_text and abs(text_valence) > 0.1:  
         if text_valence > threshold and nonverbal_valence < -threshold:
             return True, "positive_words_negative_physiology"
         
-        # Type 2: Negative words, positive/flat physiology (intellectualizing pain)
         if text_valence < -threshold and nonverbal_valence > 0:
             return True, "negative_words_flat_physiology"
         
-        # Type 3: High-stakes content but emotional flattening (dissociation indicator)
         if intensity < 0.1 and abs(text_valence) > 0.3:
             return True, "emotional_flattening"
     
-    # Type 4: Face/voice mismatch (works without text)
-    # Detect when face shows strong emotion but voice is flat/opposite
     face_audio_gap = abs(face_valence - audio_valence)
     if face_audio_gap > 0.7 and intensity > 0.3:
-        # Determine which direction
         if face_valence > 0.3 and audio_valence < 0.0:
             return True, "smiling_but_voice_shows_stress"
         elif face_valence < -0.3 and audio_valence > 0.0:
@@ -170,9 +110,6 @@ def detect_emotional_flattening(
     text_presence: List[bool],
     threshold: float = 0.12
 ) -> bool:
-    """
-    Detect sustained low intensity during speaking (potential dissociation/avoidance).
-    """
     if len(intensity_window) < 3:
         return False
     
@@ -211,7 +148,6 @@ def build_incongruence_markers(
     intensity_by_t = {int(e["t"]): e["intensity"] for e in intensity_timeline}
     
     # Analyze transcript segments for text valence and map to seconds
-    # Import here to avoid circular dependencies
     text_valence_by_t = {}  # Map second -> text_valence
     if transcript_segments:
         try:
@@ -219,7 +155,6 @@ def build_incongruence_markers(
             texts = [str(seg.get("text", "")).strip() for seg in transcript_segments]
             analyses = batch_analyze_text_emotions(texts, max_workers=5)
             
-            # Map valence to timeline seconds
             for seg, analysis in zip(transcript_segments, analyses):
                 if analysis and "valence" in analysis:
                     valence = float(analysis.get("valence", 0.0))

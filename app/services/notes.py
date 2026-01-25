@@ -13,7 +13,7 @@ def _get_notes_client():
     Get OpenAI client with hardcoded API key for notes generation.
     Returns (client, model) or (None, None) if unavailable.
     """
-    api_key = os.getenv("NOTES_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or not api_key.strip():
         return None, None
 

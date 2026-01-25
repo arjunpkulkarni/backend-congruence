@@ -107,19 +107,7 @@ def generate_simplified_notes(
     patient_id: str,
     session_id: int,
     duration: float
-) -> str:
-    """
-    Generate simplified therapist notes in markdown format.
-    
-    Args:
-        analysis_results: Output from run_simplified_analysis()
-        patient_id: Patient identifier
-        session_id: Session identifier
-        duration: Session duration in seconds
-    
-    Returns:
-        Markdown-formatted therapist notes
-    """
+) -> str:     
     intensity_timeline = analysis_results.get("intensity_timeline", [])
     incongruence_markers = analysis_results.get("incongruence_markers", [])
     repetition_patterns = analysis_results.get("repetition_patterns", {})
@@ -139,14 +127,12 @@ def generate_simplified_notes(
     lines.append(f"- **Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append("")
     
-    # Signal 1: Emotional Intensity
     lines.append("## 1️⃣ EMOTIONAL INTENSITY TIMELINE")
     lines.append("")
     lines.append(f"**Average Intensity:** {intensity_summary['avg_intensity']:.2f} (0 = flat, 1 = highly activated)")
     lines.append(f"**Peak Intensity:** {intensity_summary['peak_intensity']:.2f} at {format_timestamp(intensity_summary['peak_time'])}")
     lines.append("")
     
-    # Notable spikes
     if intensity_summary["notable_spikes"]:
         lines.append("**Notable Intensity Spikes:**")
         for spike in intensity_summary["notable_spikes"][:5]:  # Top 5
@@ -155,8 +141,7 @@ def generate_simplified_notes(
     else:
         lines.append("*No significant intensity spikes observed.*")
         lines.append("")
-    
-    # Low periods (potential avoidance/dissociation)
+
     if intensity_summary["low_periods"]:
         lines.append("**Sustained Low Intensity Periods:**")
         lines.append("*(May indicate emotional flatness, avoidance, or discussion of defended topics)*")
