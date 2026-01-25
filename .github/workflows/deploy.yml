@@ -38,19 +38,20 @@ jobs:
           ./ root@${{ secrets.DROPLET_IP }}:/opt/congruence/
           
         # Deploy application
-        ssh root@${{ secrets.DROPLET_IP }} << 'ENDSSH'
+        ssh root@${{ secrets.DROPLET_IP }} << ENDSSH
           cd /opt/congruence
           
-          # Create .env if it doesn't exist
-          if [ ! -f .env ]; then
-            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
-          fi
+          # Create/update .env file
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
           
           # Create data directories
           mkdir -p data/sessions data/media
           
-          # Deploy with Docker
-          docker compose down || true
+          # Stop and remove old containers/networks
+          docker compose down --remove-orphans || true
+          docker rm -f congruence-api || true
+          
+          # Build and deploy with Docker
           docker compose build --no-cache
           docker compose up -d
           

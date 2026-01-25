@@ -1,7 +1,7 @@
 import os
 import time
 import shutil
-from typing import Dict
+from typing import Dict, Any
 import logging
 import contextlib
 import glob
@@ -72,7 +72,7 @@ def health() -> Dict[str, str]:
 
 
 @app.get("/api-key-status")
-def api_key_status() -> Dict[str, any]:
+def api_key_status() -> Dict[str, Any]:
     """
     Check if OpenAI API key is configured (safe for frontend to call).
     Returns masked key preview for verification without exposing full key.
