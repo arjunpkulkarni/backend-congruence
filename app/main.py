@@ -219,7 +219,6 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     merged_timeline = merge_timelines(facial_timeline=facial_timeline, audio_timeline=audio_timeline)
     logger.info("Merged timeline entries=%d", len(merged_timeline))
 
-    # 7) Detect micro-spikes on merged timeline (visual-only) and derive spikes list
     merged_timeline = detect_micro_spikes(merged_timeline, threshold=payload.spike_threshold)
     spikes = [e for e in merged_timeline if e.get("micro_spike")]
     logger.info("Detected spikes=%d", len(spikes))
@@ -270,8 +269,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 sessions_root=os.path.join(workspace_root, "sessions")
             )
             
-            # Generate simplified therapist notes
-            duration_seconds = len(merged_timeline)  # Approximate from timeline length
+            duration_seconds = len(merged_timeline) 
             simplified_notes_md = generate_simplified_notes(
                 analysis_results=simplified_results,
                 patient_id=payload.patient_id,
@@ -288,10 +286,8 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             
             logger.info("Simplified analysis completed and saved")
         except Exception as exc:
-            logger.exception("Simplified analysis failed (non-critical): %s", exc)
-            # Don't fail the whole request if simplified analysis fails
+            logger.exception("Simplified analysis failed (non-critical): %s", exc)            
         
-        # 10) Generate therapist notes (comprehensive clinical notes)
         therapist_notes = None
         if transcript_text and locals().get("session_summary"):
             logger.info("Generating therapist notes...")

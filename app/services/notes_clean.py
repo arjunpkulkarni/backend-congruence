@@ -49,7 +49,20 @@ def generate_therapist_notes(
     session_summary: Optional[Dict[str, Any]] = None,
     patient_id: Optional[str] = None,
     use_sequential: bool = True,
-) -> Optional[Dict[str, Any]]:    
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate therapist notes using sequential 4-prompt pipeline.
+    
+    Args:
+        transcript_text: Full transcript text
+        transcript_segments: Optional segments with timestamps
+        session_summary: Optional session summary with emotion data
+        patient_id: Optional patient identifier
+        use_sequential: Use sequential pipeline (always True for now)
+    
+    Returns:
+        Structured therapist notes dict or None if failed
+    """
     return _generate_notes_sequential(
         transcript_text=transcript_text,
         transcript_segments=transcript_segments,
@@ -85,8 +98,9 @@ def _generate_notes_sequential(
         logger.warning("Empty transcript provided")
         return None
 
+    # Pre-process: Optional LLM analysis for text emotions
     logger.info("Pre-processing: Analyzing transcript with LLM for emotional content...")
-
+    
     llm_analysis = analyze_text_emotion_with_llm(
         text=transcript_text,
         model=None,
@@ -103,15 +117,20 @@ def _generate_notes_sequential(
     else:
         logger.warning("LLM transcript analysis failed")
 
+    # Build emotion data summary
     emotion_data_summary = _build_emotion_data_summary(llm_analysis, session_summary)
     
+    # Determine session metadata
     duration_str = "unknown"
     if session_summary and "duration" in session_summary:
         duration_seconds = session_summary.get("duration", 0)
         duration_str = f"{duration_seconds:.0f} seconds (~{duration_seconds/60:.1f} minutes)"
     
     has_timestamps = bool(transcript_segments)
-        
+    
+    # =================================================================
+    # STEP 1: DATA EXTRACTION
+    # =================================================================
     logger.info("Pipeline Step 1/4: Extracting factual data...")
     
     step1_user_msg = build_user_message_step1(
@@ -137,7 +156,10 @@ def _generate_notes_sequential(
     logger.info("Step 1 complete: %d topics, %d emotional datapoints",
                 len(step1_output.get("key_topics", [])),
                 len(step1_output.get("emotional_datapoints", [])))
-        
+    
+    # =================================================================
+    # STEP 2: EMOTIONAL ANALYSIS
+    # =================================================================
     logger.info("Pipeline Step 2/4: Analyzing emotional patterns...")
     
     step2_user_msg = build_user_message_step2(
@@ -162,7 +184,9 @@ def _generate_notes_sequential(
                 len(step2_output.get("predominant_emotions", [])),
                 len(step2_output.get("incongruence_analysis", [])))
     
-
+    # =================================================================
+    # STEP 3: CLINICAL SYNTHESIS
+    # =================================================================
     logger.info("Pipeline Step 3/4: Generating clinical observations...")
     
     step3_user_msg = build_user_message_step3(
@@ -189,7 +213,10 @@ def _generate_notes_sequential(
                 len(step3_output.get("behavioral_patterns", [])),
                 len(step3_output.get("areas_of_concern", [])),
                 risk_suicide)
-       
+    
+    # =================================================================
+    # STEP 4: RECOMMENDATIONS & FINAL SYNTHESIS
+    # =================================================================
     logger.info("Pipeline Step 4/4: Compiling recommendations...")
     
     step4_user_msg = build_user_message_step4(
@@ -215,6 +242,9 @@ def _generate_notes_sequential(
                 len(step4_output.get("key_themes", [])),
                 len(step4_output.get("recommendations", {}).get("follow_up_actions", [])))
     
+    # =================================================================
+    # MERGE OUTPUTS INTO FINAL NOTES
+    # =================================================================
     final_notes = _merge_pipeline_outputs(step1_output, step2_output, step3_output, step4_output)
     
     logger.info("Sequential pipeline completed successfully")
@@ -282,7 +312,7 @@ def _call_llm_step(
             logger.error("%s returned invalid JSON: %s", step_name, e)
             logger.debug("Raw response: %s", response_text[:500])
             return None
-        
+            
     except Exception as e:
         logger.exception("%s failed: %s", step_name, e)
         return None
@@ -294,6 +324,7 @@ def _merge_pipeline_outputs(
     step3: Dict[str, Any],
     step4: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """Merge outputs from 4-step pipeline into final notes structure."""
     final = {
         "session_overview": step4.get("session_overview", {}),
         "key_themes": step4.get("key_themes", []),
@@ -319,7 +350,16 @@ def save_therapist_notes(
     notes: Optional[Dict[str, Any]],
     output_path: str,
 ) -> bool:
-
+    """
+    Save therapist notes to a file.
+    
+    Args:
+        notes: Generated notes dictionary (structured format)
+        output_path: Path to save the notes file
+    
+    Returns:
+        True if successful, False otherwise
+    """
     if not notes:
         logger.warning("Cannot save therapist notes: notes content is empty")
         return False
@@ -327,23 +367,21 @@ def save_therapist_notes(
     try:
         logger.info("Saving therapist notes to: %s", output_path)
         
+        # Convert structured notes to readable markdown for file storage
         markdown_content = _convert_notes_to_markdown(notes)
         
-        # Ensure we have the correct paths for both JSON and MD
-        if output_path.endswith('.json'):
-            json_path = output_path
-            md_path = output_path.replace('.json', '.md')
-        elif output_path.endswith('.md'):
-            md_path = output_path
-            json_path = output_path.replace('.md', '.json')
-        else:
-            # No extension provided, add both
-            json_path = output_path + '.json'
-            md_path = output_path + '.md'
+        # Save both markdown and JSON versions
+        md_path = (output_path.replace('.json', '.md')
+                  if output_path.endswith('.json') else output_path)
+        json_path = (output_path.replace('.md', '.json')
+                    if output_path.endswith('.md')
+                    else output_path.replace('.md', '') + '.json')
         
+        # Save markdown version
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown_content)
         
+        # Save JSON version
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(notes, f, ensure_ascii=False, indent=2)
         
@@ -358,12 +396,14 @@ def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
     """Convert structured notes dictionary to readable markdown format."""
     lines = ["# Therapist Session Notes", ""]
     
+    # Handle error/fallback format
     if notes.get("format") == "fallback":
         lines.append("**Note:** This is a fallback format due to parsing issues.")
         lines.append("")
         lines.append(notes.get("raw_content", "No content available"))
         return "\n".join(lines)
     
+    # Session Overview
     if "session_overview" in notes:
         overview = notes["session_overview"]
         lines.append("## Session Overview")
@@ -379,6 +419,7 @@ def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
             lines.append(f"**Overall Tone:** {overview['overall_tone']}")
         lines.append("")
     
+    # Key Themes
     if "key_themes" in notes and notes["key_themes"]:
         lines.append("## Key Themes & Topics")
         lines.append("")
