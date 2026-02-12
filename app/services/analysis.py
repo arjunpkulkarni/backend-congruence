@@ -87,19 +87,26 @@ def analyze_frames_with_deepface(
 
     for frame_path, original_idx in sampled_paths:
         # Guard against frames without detectable faces by disabling strict enforcement
-        analysis_obj = DeepFace.analyze(
-            img_path=frame_path,
-            actions=["emotion"],
-            enforce_detection=False,
-            silent=silent,
-        )
-        # DeepFace may return dict or list depending on detection results
-        if isinstance(analysis_obj, list) and analysis_obj:
-            first = analysis_obj[0]
-            emotions = first.get("emotion", {}) if isinstance(first, dict) else {}
-        elif isinstance(analysis_obj, dict):
-            emotions = analysis_obj.get("emotion", {})
-        else:
+        try:
+            analysis_obj = DeepFace.analyze(
+                img_path=frame_path,
+                actions=["emotion"],
+                enforce_detection=False,
+                silent=silent,
+                detector_backend="opencv",  # Use opencv backend for better stability
+            )
+            # DeepFace may return dict or list depending on detection results
+            if isinstance(analysis_obj, list) and analysis_obj:
+                first = analysis_obj[0]
+                emotions = first.get("emotion", {}) if isinstance(first, dict) else {}
+            elif isinstance(analysis_obj, dict):
+                emotions = analysis_obj.get("emotion", {})
+            else:
+                emotions = {}
+        except Exception as e:
+            # If analysis fails for this frame, use neutral emotions
+            if not silent:
+                print(f"Warning: DeepFace analysis failed for frame {original_idx} ({frame_path}): {e}")
             emotions = {}
 
         norm = _normalize_emotion_dict(emotions)
