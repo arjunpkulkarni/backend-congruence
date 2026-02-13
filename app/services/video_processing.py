@@ -42,7 +42,7 @@ def extract_audio_with_ffmpeg(input_video_path: str, output_audio_path: str) -> 
 def extract_frames_with_ffmpeg(
     input_video_path: str,
     frames_dir: str,
-    fps: int = 1,
+    fps: float = 1,
     filename_pattern: str = "frame_%04d.png",
 ) -> None:
     _ensure_ffmpeg_exists()

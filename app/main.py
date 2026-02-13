@@ -5,6 +5,7 @@ from typing import Dict, Any
 import logging
 import contextlib
 import glob
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -162,12 +163,12 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
     logger.info("Audio extracted to %s", audio_path)
 
-    # 3) Extract frames (1 FPS)
+    # 3) Extract frames (0.3 FPS = 1 frame per ~3 seconds for therapy analysis)
     try:
         extract_frames_with_ffmpeg(
             input_video_path=video_path,
             frames_dir=frames_dir,
-            fps=1,
+            fps=0.3,
             filename_pattern="frame_%04d.png",
         )
     except Exception as exc:
@@ -176,44 +177,84 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
     logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
 
-    # 3.5) Speech-to-text transcription from extracted audio (best-effort)
-    transcript_text = None
-    transcript_segments = None
-    try:
-        t_text, t_segments = transcribe_audio_with_faster_whisper(audio_path=audio_path)
-        if t_text:
-            transcript_text = t_text
-            transcript_segments = t_segments
-        logger.info(
-            "Transcription completed chars=%d segments=%d",
-            len(transcript_text or ""),
-            len(transcript_segments or []),
+    logger.info("Starting parallel analysis (transcription + DeepFace + audio emotion)...")
+    parallel_start = time.time()
+    
+    async def run_parallel_analysis():
+        loop = asyncio.get_event_loop()
+        
+        # Async wrapper for transcription
+        async def async_transcription():
+            try:
+                t_text, t_segments = await loop.run_in_executor(
+                    None,
+                    transcribe_audio_with_faster_whisper,
+                    audio_path
+                )
+                if t_text:
+                    logger.info(
+                        "Transcription completed chars=%d segments=%d",
+                        len(t_text or ""),
+                        len(t_segments or []),
+                    )
+                    return t_text, t_segments
+                return None, None
+            except Exception:
+                logger.info("Transcription skipped or failed (best-effort)")
+                return None, None
+        
+        # Async wrapper for DeepFace
+        async def async_deepface():
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    analyze_frames_with_deepface,
+                    frames_dir
+                )
+                logger.info("DeepFace analysis completed entries=%d", len(result))
+                return result
+            except Exception as exc:
+                logger.exception("DeepFace analysis failed")
+                raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
+        
+        async def async_audio_emotion():
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    analyze_audio_with_vesper,
+                    audio_path
+                )
+                logger.info("Audio emotion timeline entries=%d", len(result))
+                return result
+            except Exception as exc:
+                logger.exception("Audio emotion analysis failed (Vesper required)")
+                raise HTTPException(status_code=500, detail=f"Audio emotion analysis failed: {exc}") from exc
+        
+        # Run all three tasks in parallel
+        results = await asyncio.gather(
+            async_transcription(),
+            async_deepface(),
+            async_audio_emotion(),
+            return_exceptions=False
         )
+        
+        return results
+    
+    try:
+        parallel_results = asyncio.run(run_parallel_analysis())
+        (transcript_text, transcript_segments), facial_timeline, audio_timeline = parallel_results
+        
+        parallel_duration = time.time() - parallel_start
+        logger.info("Parallel analysis completed in %.2fs (saved ~40-60s vs sequential)", parallel_duration)
+        
         if transcript_text:
             logger.info("Transcript text:\n%s", transcript_text)
         if transcript_segments:
             logger.debug("Transcript segments: %s", transcript_segments)
-    except Exception:
-        # Do not fail on transcription
-        transcript_text = None
-        transcript_segments = None
-        logger.info("Transcription skipped or failed (best-effort)")
-
-    # 4) DeepFace facial emotion analysis per frame
-    try:
-        facial_timeline = analyze_frames_with_deepface(frames_dir=frames_dir)
+            
     except Exception as exc:
-        logger.exception("DeepFace analysis failed")
-        raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
-    logger.info("DeepFace analysis completed entries=%d", len(facial_timeline))
-
-    # 5) Audio emotion analysis using Vesper (required)
-    try:
-        audio_timeline = analyze_audio_with_vesper(audio_path=audio_path)
-    except Exception as exc:
-        logger.exception("Audio emotion analysis failed (Vesper required)")
-        raise HTTPException(status_code=500, detail=f"Audio emotion analysis failed: {exc}") from exc
-    logger.info("Audio emotion timeline entries=%d", len(audio_timeline))
+        logger.exception("Parallel analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis pipeline failed: {exc}") from exc
 
     # 6) Merge into a unified timeline
     merged_timeline = merge_timelines(facial_timeline=facial_timeline, audio_timeline=audio_timeline)
