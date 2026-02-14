@@ -29,9 +29,13 @@ def extract_audio_with_ffmpeg(input_video_path: str, output_audio_path: str) -> 
         "-y",
         "-i",
         input_video_path,
-        "-vn",
+        # Explicitly select first audio stream (skip unknown codecs)
+        "-map", "0:a:0",
+        "-vn",  # No video
         "-acodec",
         "pcm_s16le",
+        "-ar", "16000",  # Resample to 16kHz (standard for speech recognition)
+        "-ac", "1",  # Convert to mono (sufficient for emotion analysis)
         output_audio_path,
     ]
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
@@ -53,8 +57,15 @@ def extract_frames_with_ffmpeg(
         "-y",
         "-i",
         input_video_path,
+        # Explicitly select only video stream (skip audio/metadata)
+        "-map", "0:v:0",
+        # Auto-rotate based on metadata, then apply fps filter, then convert to standard 8-bit format
         "-vf",
-        f"fps={fps}",
+        f"fps={fps},format=yuv420p",
+        # Handle variable frame rates properly (important for fractional fps like 0.3)
+        "-vsync", "vfr",
+        # Ignore rotation metadata after applying it (prevents double rotation)
+        "-metadata:s:v", "rotate=0",
         output_pattern,
     ]
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
