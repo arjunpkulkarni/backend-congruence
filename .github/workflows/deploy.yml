@@ -27,6 +27,43 @@ jobs:
         # Create deployment directory
         ssh root@${{ secrets.DROPLET_IP }} "mkdir -p /opt/congruence"
         
+        # Pre-deployment cleanup and disk check
+        ssh root@${{ secrets.DROPLET_IP }} << 'CLEANUP'
+          echo "=== Pre-deployment Cleanup ==="
+          
+          # Check disk space
+          DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+          AVAILABLE_GB=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
+          echo "Disk usage: ${DISK_USAGE}% (${AVAILABLE_GB}GB available)"
+          
+          # Auto-cleanup if disk usage > 80% or < 3GB available
+          if [ "$DISK_USAGE" -gt 80 ] || [ "$AVAILABLE_GB" -lt 3 ]; then
+            echo "Running automatic cleanup..."
+            
+            # Docker cleanup (frees most space)
+            echo "Cleaning Docker images and containers..."
+            docker system prune -af --volumes || true
+            
+            # Clean old sessions (keep last 10)
+            if [ -d "/opt/congruence/data/sessions" ]; then
+              cd /opt/congruence/data/sessions
+              ls -t | tail -n +11 | xargs -r rm -rf 2>/dev/null || true
+              echo "Cleaned old session data"
+            fi
+            
+            # Python cache cleanup
+            cd /opt/congruence
+            find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+            find . -type f -name "*.pyc" -delete 2>/dev/null || true
+            
+            # Report space after cleanup
+            DISK_AFTER=$(df -h / | tail -1 | awk '{print $4 " available"}')
+            echo "Disk space after cleanup: $DISK_AFTER"
+          else
+            echo "Disk space OK, skipping cleanup"
+          fi
+        CLEANUP
+        
         # Sync code (excluding unnecessary files)
         rsync -avz --delete \
           --exclude 'venv/' \
