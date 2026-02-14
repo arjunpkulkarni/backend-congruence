@@ -6,18 +6,7 @@ def transcribe_audio_with_faster_whisper(
     model_size: str = "small",
     language: Optional[str] = "en",
     fast_mode: bool = True,
-) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    Returns (full_text, segments). Each segment has:
-      { "start": float, "end": float, "text": str }
-    If faster-whisper is not installed or fails, returns ("", []).
-    
-    Args:
-        audio_path: Path to audio file
-        model_size: Whisper model size (tiny, base, small, medium, large)
-        language: Language code
-        fast_mode: Use faster settings (lower beam_size, enable VAD) for 2-3x speedup
-    """
+) -> Tuple[str, List[Dict[str, Any]]]:   
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception:
@@ -30,9 +19,10 @@ def transcribe_audio_with_faster_whisper(
         
         model = WhisperModel(model_size, device="auto", compute_type="auto")
         
-        # Fast mode: lower beam size and enable VAD for faster transcription
+        # Fast mode: lower beam size but DISABLE VAD to capture full audio duration
+        # VAD was causing early cutoff, missing parts of the session
         beam_size = 1 if fast_mode else 5
-        vad_filter = fast_mode  # VAD reduces processing for silent portions
+        vad_filter = False  # DISABLED: Was cutting off audio prematurely
         
         segments_iter, _info = model.transcribe(
             audio_path,
