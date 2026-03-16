@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -23,3 +23,29 @@ class ProcessSessionResponse(BaseModel):
     # Incongruence reasons are included in session_summary.incongruent_moments[].reason
 
 
+# Congruence Ops Agent schemas
+class AgentChatRequest(BaseModel):
+    message: str = Field(..., description="User message to the agent")
+    user_id: str = Field(..., description="User identifier")
+    role: Literal["clinician", "admin", "practice_owner"] = Field(..., description="User role")
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Optional context")
+
+
+class AgentAction(BaseModel):
+    type: str = Field(..., description="Action type identifier")
+    label: str = Field(..., description="Human-readable action label")
+    data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Action payload")
+
+
+class AgentChatResponse(BaseModel):
+    response: str = Field(..., description="Agent response message")
+    actions: List[AgentAction] = Field(default_factory=list, description="Available actions")
+    tools_used: List[str] = Field(default_factory=list, description="Tools called during processing")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Updated context")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
+
+
+class ToolResponse(BaseModel):
+    status: str = Field(..., description="Tool execution status")
+    message: str = Field(..., description="Tool response message")
+    data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Tool response data")

@@ -10,7 +10,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.models.schemas import ProcessSessionRequest, ProcessSessionResponse
+from app.models.schemas import ProcessSessionRequest, ProcessSessionResponse, AgentChatRequest, AgentChatResponse
 from app.services.video_processing import (
     download_video_file,
     extract_audio_with_ffmpeg,
@@ -33,6 +33,7 @@ from app.services.simplified_notes import (
     save_simplified_outputs,
 )
 from app.services.notes import generate_therapist_notes, save_therapist_notes
+from app.services.agent import get_agent
 from app.utils.paths import (
     get_workspace_root,
     create_session_directories,
@@ -379,4 +380,59 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     )
     return resp
 
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+async def agent_chat(request: AgentChatRequest) -> AgentChatResponse:
+    """
+    Congruence Ops Agent chat endpoint
+    
+    Processes natural language requests for clinical operations including:
+    - Clinical documentation
+    - Patient management  
+    - Insurance workflows
+    - Practice analytics
+    """
+    logger.info(
+        "Agent chat request: user_id=%s role=%s message_length=%d",
+        request.user_id,
+        request.role, 
+        len(request.message)
+    )
+    
+    try:
+        agent = get_agent()
+        response = await agent.process_message(request)
+        
+        logger.info(
+            "Agent response: tools_used=%s actions_count=%d",
+            response.tools_used,
+            len(response.actions)
+        )
+        
+        return response
+        
+    except Exception as exc:
+        logger.exception("Agent chat failed")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Agent processing failed: {exc}"
+        ) from exc
+
+
+@app.get("/agent/status")
+def agent_status() -> Dict[str, Any]:
+    """Check agent system status"""
+    try:
+        agent = get_agent()
+        return {
+            "status": "ready",
+            "model": agent.llm.model_name,
+            "tools_count": len(agent.tools),
+            "message": "Congruence Ops Agent is ready"
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "message": f"Agent initialization failed: {e}"
+        }
 
