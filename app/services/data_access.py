@@ -23,11 +23,27 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DATA_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sessions")
+PATIENTS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "patients.json")
 
 
 def _resolve_data_root() -> str:
     """Return the absolute path to data/sessions/."""
     return os.path.abspath(DATA_ROOT)
+
+
+def _load_patients_metadata() -> Dict[str, Dict[str, Any]]:
+    """Load patient metadata from patients.json."""
+    patients_path = os.path.abspath(PATIENTS_FILE)
+    if not os.path.exists(patients_path):
+        logger.warning("patients.json not found at %s", patients_path)
+        return {}
+    
+    try:
+        with open(patients_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.error("Failed to load patients.json: %s", exc)
+        return {}
 
 
 def _read_json(path: str) -> Optional[Dict[str, Any] | List[Any]]:
@@ -70,10 +86,11 @@ def list_patients() -> List[Dict[str, Any]]:
     List all patient IDs that have at least one session on disk.
 
     Returns a list of dicts:
-        [{"patient_id": "...", "session_count": N, "latest_session": <ts>}, ...]
+        [{"patient_id": "...", "name": "...", "session_count": N, "latest_session": <ts>}, ...]
     """
     root = _resolve_data_root()
     patients: List[Dict[str, Any]] = []
+    patients_metadata = _load_patients_metadata()
 
     if not os.path.isdir(root):
         logger.warning("Sessions root does not exist: %s", root)
@@ -88,8 +105,13 @@ def list_patients() -> List[Dict[str, Any]]:
         if not session_timestamps:
             continue
 
+        # Get patient metadata if available
+        metadata = patients_metadata.get(entry, {})
+        
         patients.append({
             "patient_id": entry,
+            "name": metadata.get("name", entry),  # Fallback to ID if no name
+            "mrn": metadata.get("mrn"),
             "session_count": len(session_timestamps),
             "latest_session": max(session_timestamps),
             "latest_session_date": _ts_to_iso(max(session_timestamps)),
@@ -400,3 +422,66 @@ def resolve_session(patient_id: str, session_id: Optional[int] = None) -> Option
     if session_id is not None:
         return session_id
     return find_latest_session(patient_id)
+
+
+def find_patient_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """
+    Find a patient by name (case-insensitive partial match).
+    
+    Returns patient info including patient_id, or None if not found.
+    """
+    patients_metadata = _load_patients_metadata()
+    name_lower = name.lower().strip()
+    
+    matches: List[Dict[str, Any]] = []
+    
+    for patient_id, info in patients_metadata.items():
+        patient_name = info.get("name", "").lower()
+        mrn = info.get("mrn", "").lower()
+        
+        # Match on name or MRN
+        if name_lower in patient_name or patient_name in name_lower or name_lower in mrn:
+            matches.append({
+                "patient_id": patient_id,
+                **info
+            })
+    
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        # Return all matches for disambiguation
+        return {
+            "multiple_matches": True,
+            "matches": matches,
+            "count": len(matches)
+        }
+    
+    return None
+
+
+def search_patients(query: str) -> List[Dict[str, Any]]:
+    """
+    Search for patients by name, MRN, or patient_id.
+    
+    Returns a list of matching patients with their metadata.
+    """
+    patients_metadata = _load_patients_metadata()
+    query_lower = query.lower().strip()
+    
+    matches: List[Dict[str, Any]] = []
+    
+    for patient_id, info in patients_metadata.items():
+        patient_name = info.get("name", "").lower()
+        mrn = info.get("mrn", "").lower()
+        pid_lower = patient_id.lower()
+        
+        # Match on name, MRN, or patient_id
+        if (query_lower in patient_name or 
+            query_lower in mrn or 
+            query_lower in pid_lower):
+            matches.append({
+                "patient_id": patient_id,
+                **info
+            })
+    
+    return matches

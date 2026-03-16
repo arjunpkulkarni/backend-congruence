@@ -26,6 +26,8 @@ from app.services.data_access import (
     list_patients,
     list_sessions,
     resolve_session,
+    find_patient_by_name,
+    search_patients,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,44 @@ def _json_compact(obj, max_len: int = 3000) -> str:
 # ---------------------------------------------------------------------------
 # Patient / Record Tools
 # ---------------------------------------------------------------------------
+
+@tool
+def find_patient(query: str) -> str:
+    """
+    Find a patient by their name, MRN, or partial patient ID.
+    Use this tool when the user mentions a patient by name instead of ID.
+    Example queries: "Rob Wazowski", "MRN-001", "demo"
+    Returns the patient_id and metadata needed for other tools.
+    """
+    result = find_patient_by_name(query)
+    
+    if result is None:
+        # Try broader search
+        matches = search_patients(query)
+        if not matches:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"No patient found matching '{query}'",
+                "suggestion": "Try list_all_patients to see available patients"
+            })
+        result = {"multiple_matches": True, "matches": matches, "count": len(matches)}
+    
+    if isinstance(result, dict) and result.get("multiple_matches"):
+        return json.dumps({
+            "status": "multiple_matches",
+            "count": result["count"],
+            "matches": result["matches"],
+            "message": f"Found {result['count']} patients matching '{query}'. Please be more specific or use the patient_id directly."
+        })
+    
+    return json.dumps({
+        "status": "found",
+        "patient_id": result["patient_id"],
+        "name": result.get("name"),
+        "mrn": result.get("mrn"),
+        "message": f"Found patient: {result.get('name', result['patient_id'])}"
+    })
+
 
 @tool
 def get_patient_record(query: str) -> str:
@@ -343,6 +383,7 @@ def get_practice_analytics(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 ALL_TOOLS = [
+    find_patient,
     list_all_patients,
     get_patient_record,
     get_session_transcript_tool,

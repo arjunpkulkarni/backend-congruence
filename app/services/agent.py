@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 ROLE_PERMISSIONS: Dict[str, List[str]] = {
     "clinician": [
+        "find_patient",
         "list_all_patients",
         "get_patient_record",
         "get_session_transcript_tool",
@@ -38,6 +39,7 @@ ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "suggest_icd10_codes",
     ],
     "admin": [
+        "find_patient",
         "list_all_patients",
         "get_patient_record",
         "generate_insurance_packet",
@@ -45,6 +47,7 @@ ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "check_claim_status",
     ],
     "practice_owner": [
+        "find_patient",
         "list_all_patients",
         "get_patient_record",
         "get_session_transcript_tool",
@@ -77,14 +80,20 @@ You help clinicians, administrators, and practice owners with:
 - Practice-wide analytics and metrics
 
 Workflow guidelines:
-1. If the user refers to a patient but you don't have their ID, call
-   list_all_patients first.
-2. If the user asks about a session but doesn't specify which, default
+1. **When the user mentions a patient by NAME** (e.g., "Rob Wazowski", "demo patient"):
+   - ALWAYS call find_patient first to get the patient_id
+   - Then use that patient_id for subsequent tool calls
+2. **When the user provides a patient_id** (UUID format):
+   - Use it directly in tool calls
+3. If the user asks about a session but doesn't specify which, default
    to the latest session for that patient.
-3. Always cite specific data (congruence scores, timestamps, quotes)
+4. Always cite specific data (congruence scores, timestamps, quotes)
    when summarising clinical information.
-4. Be professional and HIPAA-compliant at all times.
-5. When uncertain, ask clarifying questions.
+5. Be professional and HIPAA-compliant at all times.
+6. When uncertain, ask clarifying questions.
+
+IMPORTANT: Users prefer to use patient names, not IDs. Always try find_patient first
+when a name is mentioned.
 """
 
 
