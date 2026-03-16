@@ -49,3 +49,25 @@ class ToolResponse(BaseModel):
     status: str = Field(..., description="Tool execution status")
     message: str = Field(..., description="Tool response message")
     data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Tool response data")
+
+
+# ---------------------------------------------------------------------------
+# Data Access API schemas (Iteration 2)
+# ---------------------------------------------------------------------------
+
+class PatientListItem(BaseModel):
+    patient_id: str
+    session_count: int
+    latest_session: int
+    latest_session_date: str
+
+
+class SessionListItem(BaseModel):
+    session_id: int
+    session_date: str
+    patient_id: str
+    has_summary: bool = False
+    has_notes: bool = False
+    has_transcript: bool = False
+    duration: Optional[float] = None
+    overall_congruence: Optional[float] = None

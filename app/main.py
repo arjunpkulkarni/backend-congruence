@@ -1,16 +1,21 @@
 import os
 import time
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 import logging
 import contextlib
 import glob
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.models.schemas import ProcessSessionRequest, ProcessSessionResponse, AgentChatRequest, AgentChatResponse
+from app.models.schemas import (
+    ProcessSessionRequest,
+    ProcessSessionResponse,
+    AgentChatRequest,
+    AgentChatResponse,
+)
 from app.services.video_processing import (
     download_video_file,
     extract_audio_with_ffmpeg,
@@ -34,6 +39,15 @@ from app.services.simplified_notes import (
 )
 from app.services.notes import generate_therapist_notes, save_therapist_notes
 from app.services.agent import get_agent
+from app.services.data_access import (
+    list_patients as da_list_patients,
+    list_sessions as da_list_sessions,
+    get_session_summary as da_get_session_summary,
+    get_session_transcript as da_get_session_transcript,
+    get_therapist_notes as da_get_therapist_notes,
+    get_patient_history as da_get_patient_history,
+    get_practice_analytics_data as da_get_practice_analytics,
+)
 from app.utils.paths import (
     get_workspace_root,
     create_session_directories,
@@ -50,7 +64,7 @@ if not logger.handlers:
     logger.addHandler(_handler)
 
 
-app = FastAPI(title="Emotion Analysis API", version="0.1.0")
+app = FastAPI(title="Emotion Analysis API", version="0.2.0")
 
 # Log API key status on startup
 api_key = os.getenv("OPENAI_API_KEY")
@@ -67,6 +81,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# =====================================================================
+# Health / Utility
+# =====================================================================
 
 @app.get("/health")
 def health() -> Dict[str, str]:
@@ -88,45 +106,35 @@ def api_key_status_options():
 
 @app.get("/api-key-status")
 def api_key_status() -> Dict[str, Any]:
-    """
-    Check if OpenAI API key is configured (safe for frontend to call).
-    Returns masked key preview for verification without exposing full key.
-    """
+    """Check if OpenAI API key is configured."""
     logger.info("API key status endpoint called")
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
+    key = os.getenv("OPENAI_API_KEY")
+
+    if not key:
         return {
             "configured": False,
             "present": False,
-            "message": "OPENAI_API_KEY not configured"
+            "message": "OPENAI_API_KEY not configured",
         }
-    
-    # Show only first 7 and last 4 characters for verification
-    masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 11 else "***"
-    
+
+    masked = f"{key[:7]}...{key[-4:]}" if len(key) > 11 else "***"
     return {
         "configured": True,
         "present": True,
-        "key_preview": masked_key,
-        "key_length": len(api_key),
+        "key_preview": masked,
+        "key_length": len(key),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        "message": "OpenAI API key is configured"
+        "message": "OpenAI API key is configured",
     }
 
 
+# =====================================================================
+# Session Processing (existing pipeline)
+# =====================================================================
+
 @app.post("/process_session", response_model=ProcessSessionResponse)
 def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
-    """
-    1) Download video
-    2) Extract audio via ffmpeg
-    3) Extract frames (1 FPS) via ffmpeg
-    4) DeepFace on frames -> facial emotions timeline
-    5) Vesper audio emotions (if available)
-    6) Merge timelines
-    7) Detect micro-spikes
-    """
-    # Prepare session directories under workspace
+    """Full video analysis pipeline."""
     start_time = time.time()
     logger.info(
         "process_session START patient_id=%s video_url=%s",
@@ -148,7 +156,6 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     try:
         download_video_file(video_url=payload.video_url, destination_path=video_path)
     except Exception as exc:
-        # Best-effort cleanup for partially downloaded files
         with contextlib.suppress(Exception):
             if os.path.isdir(session_dir):
                 shutil.rmtree(session_dir)
@@ -164,7 +171,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
     logger.info("Audio extracted to %s", audio_path)
 
-    # 3) Extract frames (0.3 FPS = 1 frame per ~3 seconds for therapy analysis)
+    # 3) Extract frames
     try:
         extract_frames_with_ffmpeg(
             input_video_path=video_path,
@@ -178,86 +185,61 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
     logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
 
-    logger.info("Starting parallel analysis (transcription + DeepFace + audio emotion)...")
+    logger.info("Starting parallel analysis...")
     parallel_start = time.time()
-    
+
     async def run_parallel_analysis():
         loop = asyncio.get_event_loop()
-        
-        # Async wrapper for transcription
+
         async def async_transcription():
             try:
                 t_text, t_segments = await loop.run_in_executor(
-                    None,
-                    transcribe_audio_with_faster_whisper,
-                    audio_path
+                    None, transcribe_audio_with_faster_whisper, audio_path
                 )
                 if t_text:
-                    logger.info(
-                        "Transcription completed chars=%d segments=%d",
-                        len(t_text or ""),
-                        len(t_segments or []),
-                    )
+                    logger.info("Transcription completed chars=%d segments=%d", len(t_text or ""), len(t_segments or []))
                     return t_text, t_segments
                 return None, None
             except Exception:
                 logger.info("Transcription skipped or failed (best-effort)")
                 return None, None
-        
-        # Async wrapper for DeepFace
+
         async def async_deepface():
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    analyze_frames_with_deepface,
-                    frames_dir
-                )
+                result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir)
                 logger.info("DeepFace analysis completed entries=%d", len(result))
                 return result
             except Exception as exc:
                 logger.exception("DeepFace analysis failed")
                 raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
-        
+
         async def async_audio_emotion():
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    analyze_audio_with_vesper,
-                    audio_path
-                )
+                result = await loop.run_in_executor(None, analyze_audio_with_vesper, audio_path)
                 logger.info("Audio emotion timeline entries=%d", len(result))
                 return result
             except Exception as exc:
                 logger.exception("Audio emotion analysis failed (Vesper required)")
                 raise HTTPException(status_code=500, detail=f"Audio emotion analysis failed: {exc}") from exc
-        
-        # Run all three tasks in parallel
+
         results = await asyncio.gather(
-            async_transcription(),
-            async_deepface(),
-            async_audio_emotion(),
-            return_exceptions=False
+            async_transcription(), async_deepface(), async_audio_emotion(), return_exceptions=False
         )
-        
         return results
-    
+
     try:
         parallel_results = asyncio.run(run_parallel_analysis())
         (transcript_text, transcript_segments), facial_timeline, audio_timeline = parallel_results
-        
         parallel_duration = time.time() - parallel_start
-        logger.info("Parallel analysis completed in %.2fs (saved ~40-60s vs sequential)", parallel_duration)
-        
+        logger.info("Parallel analysis completed in %.2fs", parallel_duration)
         if transcript_text:
             logger.info("Transcript text:\n%s", transcript_text)
         if transcript_segments:
             logger.debug("Transcript segments: %s", transcript_segments)
-            
     except Exception as exc:
         logger.exception("Parallel analysis failed")
         raise HTTPException(status_code=500, detail=f"Analysis pipeline failed: {exc}") from exc
 
-    # 6) Merge into a unified timeline
     merged_timeline = merge_timelines(facial_timeline=facial_timeline, audio_timeline=audio_timeline)
     logger.info("Merged timeline entries=%d", len(merged_timeline))
 
@@ -265,7 +247,6 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     spikes = [e for e in merged_timeline if e.get("micro_spike")]
     logger.info("Detected spikes=%d", len(spikes))
 
-    # 8) Build 10Hz congruence signal and session summary and write outputs for UI
     try:
         def _write_json(path: str, obj: object) -> None:
             with open(path, "w", encoding="utf-8") as f:
@@ -283,24 +264,18 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             session_id=session_ts,
             transcript_segments=transcript_segments,
         )
-        timeline_json_path = os.path.join(outputs_dir, "timeline.json")
-        timeline_1hz_path = os.path.join(outputs_dir, "timeline_1hz.json")
-        spikes_json_path = os.path.join(outputs_dir, "spikes.json")
-        session_summary_path = os.path.join(outputs_dir, "session_summary.json")
-        _write_json(timeline_json_path, congruence_timeline_10hz)
-        _write_json(timeline_1hz_path, merged_timeline)
-        _write_json(spikes_json_path, spikes)
-        _write_json(session_summary_path, session_summary)
+        _write_json(os.path.join(outputs_dir, "timeline.json"), congruence_timeline_10hz)
+        _write_json(os.path.join(outputs_dir, "timeline_1hz.json"), merged_timeline)
+        _write_json(os.path.join(outputs_dir, "spikes.json"), spikes)
+        _write_json(os.path.join(outputs_dir, "session_summary.json"), session_summary)
         if transcript_text:
-            transcript_txt_path = os.path.join(outputs_dir, "transcript.txt")
-            with open(transcript_txt_path, "w", encoding="utf-8") as f:
+            with open(os.path.join(outputs_dir, "transcript.txt"), "w", encoding="utf-8") as f:
                 f.write(transcript_text)
         if transcript_segments:
-            transcript_segments_path = os.path.join(outputs_dir, "transcript_segments.json")
-            _write_json(transcript_segments_path, transcript_segments)
+            _write_json(os.path.join(outputs_dir, "transcript_segments.json"), transcript_segments)
         logger.info("Wrote enriched timeline and session summary to outputs/")
-        
-        # 9) Run simplified analysis (3-signal approach)
+
+        # Simplified analysis
         logger.info("Running simplified analysis (3 signals)...")
         try:
             simplified_results = run_simplified_analysis(
@@ -308,28 +283,24 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 transcript_segments=transcript_segments,
                 patient_id=payload.patient_id,
                 session_id=session_ts,
-                sessions_root=os.path.join(workspace_root, "sessions")
+                sessions_root=os.path.join(workspace_root, "sessions"),
             )
-            
-            duration_seconds = len(merged_timeline) 
+            duration_seconds = len(merged_timeline)
             simplified_notes_md = generate_simplified_notes(
                 analysis_results=simplified_results,
                 patient_id=payload.patient_id,
                 session_id=session_ts,
-                duration=duration_seconds
+                duration=duration_seconds,
             )
-            
-            # Save simplified outputs
             save_simplified_outputs(
                 analysis_results=simplified_results,
                 notes_markdown=simplified_notes_md,
-                output_dir=outputs_dir
+                output_dir=outputs_dir,
             )
-            
             logger.info("Simplified analysis completed and saved")
         except Exception as exc:
-            logger.exception("Simplified analysis failed (non-critical): %s", exc)            
-        
+            logger.exception("Simplified analysis failed (non-critical): %s", exc)
+
         therapist_notes = None
         if transcript_text and locals().get("session_summary"):
             logger.info("Generating therapist notes...")
@@ -341,15 +312,14 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                     patient_id=payload.patient_id,
                 )
                 if therapist_notes:
-                    # Save therapist notes to file
                     therapist_notes_path = os.path.join(outputs_dir, "therapist_notes.md")
                     save_therapist_notes(therapist_notes, therapist_notes_path)
                     logger.info("Therapist notes generated and saved (%d chars)", len(therapist_notes))
                 else:
-                    logger.info("Therapist notes generation skipped (API key not configured or generation failed)")
+                    logger.info("Therapist notes generation skipped")
             except Exception as exc:
                 logger.exception("Therapist notes generation failed (non-critical): %s", exc)
-        
+
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
 
@@ -381,58 +351,121 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     return resp
 
 
+# =====================================================================
+# Congruence Ops Agent (Iteration 2 - real tool calling)
+# =====================================================================
+
 @app.post("/agent/chat", response_model=AgentChatResponse)
 async def agent_chat(request: AgentChatRequest) -> AgentChatResponse:
     """
-    Congruence Ops Agent chat endpoint
-    
-    Processes natural language requests for clinical operations including:
-    - Clinical documentation
-    - Patient management  
-    - Insurance workflows
-    - Practice analytics
+    Congruence Ops Agent chat endpoint.
+
+    The agent uses real tools backed by the data access layer to read
+    session data, transcripts, clinical notes, and analytics from disk.
     """
     logger.info(
         "Agent chat request: user_id=%s role=%s message_length=%d",
         request.user_id,
-        request.role, 
-        len(request.message)
+        request.role,
+        len(request.message),
     )
-    
+
     try:
         agent = get_agent()
         response = await agent.process_message(request)
-        
         logger.info(
             "Agent response: tools_used=%s actions_count=%d",
             response.tools_used,
-            len(response.actions)
+            len(response.actions),
         )
-        
         return response
-        
     except Exception as exc:
         logger.exception("Agent chat failed")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Agent processing failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"Agent processing failed: {exc}") from exc
 
 
 @app.get("/agent/status")
 def agent_status() -> Dict[str, Any]:
-    """Check agent system status"""
+    """Check agent system status including available tools."""
     try:
         agent = get_agent()
+        from app.services.agent_tools import ALL_TOOLS
+
         return {
             "status": "ready",
             "model": agent.llm.model_name,
-            "tools_count": len(agent.tools),
-            "message": "Congruence Ops Agent is ready"
+            "tools_count": len(ALL_TOOLS),
+            "tools": [t.name for t in ALL_TOOLS],
+            "message": "Congruence Ops Agent is ready (Iteration 2 - real data access)",
         }
     except Exception as e:
-        return {
-            "status": "error", 
-            "message": f"Agent initialization failed: {e}"
-        }
+        return {"status": "error", "message": f"Agent initialization failed: {e}"}
 
+
+# =====================================================================
+# Data Access API (Iteration 2)
+# =====================================================================
+
+@app.get("/data/patients")
+def api_list_patients() -> Dict[str, Any]:
+    """List all patients with session counts and latest activity."""
+    patients = da_list_patients()
+    return {"patients": patients, "total": len(patients)}
+
+
+@app.get("/data/patients/{patient_id}/sessions")
+def api_list_sessions(patient_id: str) -> Dict[str, Any]:
+    """List all sessions for a patient, sorted newest first."""
+    sessions = da_list_sessions(patient_id)
+    if not sessions:
+        raise HTTPException(status_code=404, detail=f"No sessions found for patient '{patient_id}'")
+    return {"patient_id": patient_id, "sessions": sessions, "total": len(sessions)}
+
+
+@app.get("/data/patients/{patient_id}/sessions/{session_id}/summary")
+def api_get_session_summary(patient_id: str, session_id: int) -> Dict[str, Any]:
+    """Get session summary including congruence scores and emotion distributions."""
+    summary = da_get_session_summary(patient_id, session_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Session summary not found")
+    return summary
+
+
+@app.get("/data/patients/{patient_id}/sessions/{session_id}/transcript")
+def api_get_transcript(
+    patient_id: str,
+    session_id: int,
+    include_segments: bool = Query(True, description="Include timed segments"),
+) -> Dict[str, Any]:
+    """Get session transcript with optional timed segments."""
+    transcript = da_get_session_transcript(patient_id, session_id, include_segments)
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    return transcript
+
+
+@app.get("/data/patients/{patient_id}/sessions/{session_id}/notes")
+def api_get_notes(patient_id: str, session_id: int) -> Dict[str, Any]:
+    """Get structured therapist notes for a session."""
+    notes = da_get_therapist_notes(patient_id, session_id)
+    if notes is None:
+        raise HTTPException(status_code=404, detail="Therapist notes not found")
+    return notes
+
+
+@app.get("/data/patients/{patient_id}/history")
+def api_get_patient_history(
+    patient_id: str,
+    limit: int = Query(10, ge=1, le=50, description="Max sessions to include"),
+) -> Dict[str, Any]:
+    """Get patient history including congruence trend and latest notes summary."""
+    history = da_get_patient_history(patient_id, limit)
+    if not history.get("sessions"):
+        raise HTTPException(status_code=404, detail=f"No history found for patient '{patient_id}'")
+    return history
+
+
+@app.get("/data/analytics")
+def api_get_practice_analytics() -> Dict[str, Any]:
+    """Get practice-wide analytics: total patients, sessions, average congruence."""
+    return da_get_practice_analytics()

@@ -1,0 +1,358 @@
+"""
+Real tool implementations for the Congruence Ops Agent.
+
+Each tool wraps the data_access layer and returns a formatted string
+that the LLM can reason over.  Tools follow the LangChain @tool decorator
+pattern and accept a single JSON-serialisable input.
+"""
+
+import json
+import logging
+from typing import Optional
+
+from langchain_core.tools import tool
+
+from app.services.data_access import (
+    get_congruence_timeline,
+    get_incongruence_markers,
+    get_intensity_timeline,
+    get_patient_history,
+    get_practice_analytics_data,
+    get_session_summary,
+    get_session_transcript,
+    get_simplified_notes,
+    get_spikes,
+    get_therapist_notes,
+    list_patients,
+    list_sessions,
+    resolve_session,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _json_compact(obj, max_len: int = 3000) -> str:
+    """Serialize to compact JSON, truncated to max_len chars."""
+    raw = json.dumps(obj, indent=2, default=str)
+    if len(raw) > max_len:
+        return raw[:max_len] + "\n... (truncated)"
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# Patient / Record Tools
+# ---------------------------------------------------------------------------
+
+@tool
+def get_patient_record(query: str) -> str:
+    """
+    Retrieve patient record, session history, and congruence trend.
+    The query should contain the patient_id. If you don't know the
+    patient_id, call list_all_patients first.
+    Example query: "4e3c1260-9e27-4cc8-9720-114e068d03f1"
+    """
+    patient_id = query.strip()
+    if not patient_id:
+        return "Error: please provide a patient_id."
+
+    history = get_patient_history(patient_id)
+    if not history.get("sessions"):
+        return f"No records found for patient '{patient_id}'. Use list_all_patients to see available patients."
+
+    return _json_compact(history)
+
+
+@tool
+def list_all_patients(query: str) -> str:
+    """
+    List all patients in the system with their session counts and latest activity.
+    No specific query needed — pass any string (e.g. 'all').
+    """
+    patients = list_patients()
+    if not patients:
+        return "No patients found in the system."
+    return _json_compact({"patients": patients, "total": len(patients)})
+
+
+# ---------------------------------------------------------------------------
+# Transcript Tool
+# ---------------------------------------------------------------------------
+
+@tool
+def get_session_transcript_tool(query: str) -> str:
+    """
+    Get the transcript from a therapy session.
+    Query format: 'patient_id' or 'patient_id session_id'.
+    If session_id is omitted the latest session is used.
+    Example: '4e3c1260-9e27-4cc8-9720-114e068d03f1 1768675235'
+    """
+    parts = query.strip().split()
+    if not parts:
+        return "Error: provide patient_id (and optionally session_id)."
+
+    patient_id = parts[0]
+    session_id = int(parts[1]) if len(parts) > 1 else None
+    session_id = resolve_session(patient_id, session_id)
+
+    if session_id is None:
+        return f"No sessions found for patient '{patient_id}'."
+
+    transcript = get_session_transcript(patient_id, session_id)
+    if transcript is None:
+        return f"No transcript available for patient '{patient_id}' session {session_id}."
+
+    return _json_compact(transcript)
+
+
+# ---------------------------------------------------------------------------
+# Clinical Note Generation Tool
+# ---------------------------------------------------------------------------
+
+@tool
+def generate_clinical_note(query: str) -> str:
+    """
+    Retrieve existing clinical notes for a session, including the
+    structured therapist notes and simplified notes.
+    Query format: 'patient_id' or 'patient_id session_id'.
+    """
+    parts = query.strip().split()
+    if not parts:
+        return "Error: provide patient_id (and optionally session_id)."
+
+    patient_id = parts[0]
+    session_id = int(parts[1]) if len(parts) > 1 else None
+    session_id = resolve_session(patient_id, session_id)
+
+    if session_id is None:
+        return f"No sessions found for patient '{patient_id}'."
+
+    # Gather both note types
+    notes = get_therapist_notes(patient_id, session_id)
+    simplified = get_simplified_notes(patient_id, session_id)
+    summary = get_session_summary(patient_id, session_id)
+
+    if notes is None and simplified is None:
+        return f"No clinical notes available for patient '{patient_id}' session {session_id}."
+
+    result = {
+        "patient_id": patient_id,
+        "session_id": session_id,
+    }
+    if notes:
+        result["therapist_notes"] = notes
+    if simplified:
+        result["simplified_notes_preview"] = simplified[:1500]
+    if summary:
+        result["session_summary"] = {
+            "duration": summary.get("duration"),
+            "overall_congruence": summary.get("overall_congruence"),
+            "incongruent_moments_count": len(summary.get("incongruent_moments", [])),
+            "emotion_distribution": summary.get("emotion_distribution"),
+        }
+
+    return _json_compact(result, max_len=4000)
+
+
+# ---------------------------------------------------------------------------
+# ICD-10 Suggestion Tool
+# ---------------------------------------------------------------------------
+
+@tool
+def suggest_icd10_codes(query: str) -> str:
+    """
+    Suggest ICD-10 diagnostic codes based on session data and clinical notes.
+    Query format: 'patient_id' or 'patient_id session_id'.
+    Analyzes therapist notes, risk assessment, and emotional patterns
+    to suggest relevant diagnostic codes.
+    """
+    parts = query.strip().split()
+    if not parts:
+        return "Error: provide patient_id (and optionally session_id)."
+
+    patient_id = parts[0]
+    session_id = int(parts[1]) if len(parts) > 1 else None
+    session_id = resolve_session(patient_id, session_id)
+
+    if session_id is None:
+        return f"No sessions found for patient '{patient_id}'."
+
+    notes = get_therapist_notes(patient_id, session_id)
+    summary = get_session_summary(patient_id, session_id)
+
+    if notes is None and summary is None:
+        return f"No clinical data available for code suggestion. Process a session first."
+
+    # Build context for the LLM to reason about ICD-10 codes
+    context = {
+        "patient_id": patient_id,
+        "session_id": session_id,
+        "note": (
+            "ICD-10 code suggestions require clinical judgment. "
+            "The following data is provided for the agent to reason about possible codes. "
+            "These are NOT automated diagnoses."
+        ),
+    }
+
+    if notes:
+        risk = notes.get("risk_assessment", {})
+        observations = notes.get("clinical_observations", {})
+        themes = notes.get("key_themes", [])
+        context["risk_assessment"] = risk
+        context["clinical_observations"] = observations
+        context["themes"] = [t.get("theme", "") for t in themes]
+
+    if summary:
+        context["overall_congruence"] = summary.get("overall_congruence")
+        context["emotion_distribution"] = summary.get("emotion_distribution")
+        context["incongruent_moments"] = summary.get("incongruent_moments", [])
+
+    return _json_compact(context, max_len=3000)
+
+
+# ---------------------------------------------------------------------------
+# Insurance / Billing Tools (stub-ish but with real data context)
+# ---------------------------------------------------------------------------
+
+@tool
+def generate_insurance_packet(query: str) -> str:
+    """
+    Generate an insurance authorization packet for a patient.
+    Query format: 'patient_id' or 'patient_id session_id'.
+    Gathers session summary, notes, and congruence data to build
+    documentation that supports medical necessity.
+    """
+    parts = query.strip().split()
+    if not parts:
+        return "Error: provide patient_id (and optionally session_id)."
+
+    patient_id = parts[0]
+    session_id = int(parts[1]) if len(parts) > 1 else None
+    session_id = resolve_session(patient_id, session_id)
+
+    if session_id is None:
+        return f"No sessions found for patient '{patient_id}'."
+
+    summary = get_session_summary(patient_id, session_id)
+    notes = get_therapist_notes(patient_id, session_id)
+    history = get_patient_history(patient_id, limit=5)
+
+    packet = {
+        "patient_id": patient_id,
+        "session_id": session_id,
+        "packet_type": "prior_authorization",
+        "status": "draft",
+        "session_summary": {
+            "duration": summary.get("duration") if summary else None,
+            "overall_congruence": summary.get("overall_congruence") if summary else None,
+            "incongruent_moments": len(summary.get("incongruent_moments", [])) if summary else 0,
+        } if summary else None,
+        "clinical_justification": {
+            "themes": [t.get("theme", "") for t in (notes or {}).get("key_themes", [])],
+            "risk_flags": bool(notes and notes.get("risk_assessment")),
+            "session_count": history.get("total_sessions", 0),
+        },
+        "note": (
+            "This is a draft insurance packet. A clinician should review and "
+            "complete this before submission. Full integration with insurance "
+            "APIs will be available in a future iteration."
+        ),
+    }
+
+    return _json_compact(packet)
+
+
+@tool
+def check_claim_status(query: str) -> str:
+    """
+    Check insurance claim status for a patient.
+    Query should be a patient_id or claim reference number.
+    Note: Real insurance API integration is planned for a future iteration.
+    """
+    return json.dumps({
+        "query": query.strip(),
+        "status": "pending_integration",
+        "message": (
+            "Insurance claim status checking requires integration with insurance "
+            "clearinghouse APIs (e.g. Availity, Change Healthcare). This will be "
+            "implemented in a future iteration. For now, check your practice "
+            "management system directly."
+        ),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Scheduling / Intake Tools (stubs with helpful context)
+# ---------------------------------------------------------------------------
+
+@tool
+def schedule_appointment(query: str) -> str:
+    """
+    Schedule a patient appointment.
+    Query should include patient_id and desired date/time.
+    Note: Real scheduling integration is planned for a future iteration.
+    """
+    return json.dumps({
+        "query": query.strip(),
+        "status": "pending_integration",
+        "message": (
+            "Appointment scheduling requires integration with your practice "
+            "management system (e.g. SimplePractice, TherapyNotes). This will "
+            "be implemented in a future iteration."
+        ),
+    })
+
+
+@tool
+def send_intake_form(query: str) -> str:
+    """
+    Send intake forms to a patient via email.
+    Query should include patient_id or email address.
+    Note: Real form delivery is planned for a future iteration.
+    """
+    return json.dumps({
+        "query": query.strip(),
+        "status": "pending_integration",
+        "message": (
+            "Intake form delivery requires email/SMS integration. "
+            "This will be implemented in a future iteration."
+        ),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Practice Analytics Tool
+# ---------------------------------------------------------------------------
+
+@tool
+def get_practice_analytics(query: str) -> str:
+    """
+    Generate practice-wide metrics and analytics including total patients,
+    sessions, average congruence scores, and recent activity.
+    No specific query needed — pass any string (e.g. 'overview').
+    """
+    analytics = get_practice_analytics_data()
+    return _json_compact(analytics, max_len=4000)
+
+
+# ---------------------------------------------------------------------------
+# Tool Registry
+# ---------------------------------------------------------------------------
+
+ALL_TOOLS = [
+    list_all_patients,
+    get_patient_record,
+    get_session_transcript_tool,
+    generate_clinical_note,
+    suggest_icd10_codes,
+    generate_insurance_packet,
+    check_claim_status,
+    schedule_appointment,
+    send_intake_form,
+    get_practice_analytics,
+]
+
+TOOL_MAP = {t.name: t for t in ALL_TOOLS}
