@@ -46,6 +46,51 @@ def _load_patients_metadata() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _load_patients_from_db() -> Dict[str, Dict[str, Any]]:
+    """
+    Load patient metadata from Supabase database with fallback to patients.json.
+    
+    Returns dict mapping patient_id -> patient metadata
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        logger.debug("Database not enabled, using patients.json")
+        return _load_patients_metadata()
+    
+    try:
+        # Query patients table from Supabase
+        response = db.client.table("patients").select("*").execute()
+        
+        if not response.data:
+            logger.warning("No patients in database, falling back to patients.json")
+            return _load_patients_metadata()
+        
+        # Convert to dict format matching patients.json structure
+        patients_dict = {}
+        for patient in response.data:
+            patient_id = str(patient["id"])
+            patients_dict[patient_id] = {
+                "name": patient.get("name", "Unknown"),
+                "dob": patient.get("date_of_birth"),
+                "contact_email": patient.get("contact_email"),
+                "contact_phone": patient.get("contact_phone"),
+                "therapist_id": patient.get("therapist_id"),
+                "clinic_id": patient.get("clinic_id"),
+                "created_at": patient.get("created_at"),
+                "updated_at": patient.get("updated_at"),
+            }
+        
+        logger.info(f"Loaded {len(patients_dict)} patients from Supabase")
+        return patients_dict
+        
+    except Exception as exc:
+        logger.error(f"Failed to load patients from database: {exc}, using patients.json")
+        return _load_patients_metadata()
+
+
 def _read_json(path: str) -> Optional[Dict[str, Any] | List[Any]]:
     """Safely read and parse a JSON file."""
     try:
@@ -90,7 +135,7 @@ def list_patients() -> List[Dict[str, Any]]:
     """
     root = _resolve_data_root()
     patients: List[Dict[str, Any]] = []
-    patients_metadata = _load_patients_metadata()
+    patients_metadata = _load_patients_from_db()  # Changed to use database
 
     if not os.path.isdir(root):
         logger.warning("Sessions root does not exist: %s", root)
@@ -111,7 +156,7 @@ def list_patients() -> List[Dict[str, Any]]:
         patients.append({
             "patient_id": entry,
             "name": metadata.get("name", entry),  # Fallback to ID if no name
-            "mrn": metadata.get("mrn"),
+            "mrn": None,  # MRN not in database
             "session_count": len(session_timestamps),
             "latest_session": max(session_timestamps),
             "latest_session_date": _ts_to_iso(max(session_timestamps)),
@@ -430,17 +475,16 @@ def find_patient_by_name(name: str) -> Optional[Dict[str, Any]]:
     
     Returns patient info including patient_id, or None if not found.
     """
-    patients_metadata = _load_patients_metadata()
+    patients_metadata = _load_patients_from_db()  # Changed to use database
     name_lower = name.lower().strip()
     
     matches: List[Dict[str, Any]] = []
     
     for patient_id, info in patients_metadata.items():
         patient_name = info.get("name", "").lower()
-        mrn = info.get("mrn", "").lower()
         
-        # Match on name or MRN
-        if name_lower in patient_name or patient_name in name_lower or name_lower in mrn:
+        # Match on name only (no MRN in database)
+        if name_lower in patient_name or patient_name in name_lower:
             matches.append({
                 "patient_id": patient_id,
                 **info
@@ -461,24 +505,21 @@ def find_patient_by_name(name: str) -> Optional[Dict[str, Any]]:
 
 def search_patients(query: str) -> List[Dict[str, Any]]:
     """
-    Search for patients by name, MRN, or patient_id.
+    Search for patients by name or patient_id.
     
     Returns a list of matching patients with their metadata.
     """
-    patients_metadata = _load_patients_metadata()
+    patients_metadata = _load_patients_from_db()  # Changed to use database
     query_lower = query.lower().strip()
     
     matches: List[Dict[str, Any]] = []
     
     for patient_id, info in patients_metadata.items():
         patient_name = info.get("name", "").lower()
-        mrn = info.get("mrn", "").lower()
         pid_lower = patient_id.lower()
         
-        # Match on name, MRN, or patient_id
-        if (query_lower in patient_name or 
-            query_lower in mrn or 
-            query_lower in pid_lower):
+        # Match on name or patient_id (no MRN in database)
+        if query_lower in patient_name or query_lower in pid_lower:
             matches.append({
                 "patient_id": patient_id,
                 **info
