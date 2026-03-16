@@ -29,6 +29,7 @@ from app.services.data_access import (
     find_patient_by_name,
     search_patients,
 )
+from app.services.agent_intent import format_evidence_response
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +365,144 @@ def send_intake_form(query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Evidence Search Tool (NEW - for "show me proof" queries)
+# ---------------------------------------------------------------------------
+
+@tool
+def search_clinical_evidence(query: str) -> str:
+    """
+    Search for specific evidence/mentions in patient records, notes, and transcripts.
+    Use this when the user asks for PROOF, EVIDENCE, or specific MENTIONS of conditions/topics.
+    
+    Query format: 'search_term patient_id' or just 'search_term' to search all patients.
+    Examples: "OCD", "anxiety Rob Wazowski", "sleep problems"
+    
+    Returns exact quotes with sources, timestamps, and patient info.
+    """
+    parts = query.strip().split()
+    if not parts:
+        return json.dumps({"error": "Please provide search terms"})
+    
+    # Try to extract patient_id from query
+    patient_id = None
+    search_terms = []
+    
+    for part in parts:
+        # Check if it's a UUID-like patient_id
+        if len(part) > 30 or part in ["4e3c1260-9e27-4cc8-9720-114e068d03f1", "demo", "dev"]:
+            patient_id = part
+        else:
+            search_terms.append(part.lower())
+    
+    search_query = " ".join(search_terms)
+    
+    # Get patients to search
+    if patient_id:
+        patients_to_search = [{"patient_id": patient_id}]
+    else:
+        patients_to_search = list_patients()
+    
+    # Search for evidence
+    evidence_found = []
+    
+    for patient in patients_to_search:
+        pid = patient["patient_id"]
+        patient_name = patient.get("name", pid)
+        
+        # Get latest session
+        sessions = list_sessions(pid)
+        if not sessions:
+            continue
+        
+        latest_session = sessions[0]
+        sid = latest_session["session_id"]
+        
+        # Search in clinical notes
+        notes = get_therapist_notes(pid, sid)
+        if notes:
+            # Search in key themes
+            for theme in notes.get("key_themes", []):
+                theme_text = json.dumps(theme).lower()
+                if any(term in theme_text for term in search_terms):
+                    evidence_found.append({
+                        "text": theme.get("description", ""),
+                        "source": f"Clinical Notes - Theme: {theme.get('theme', 'Unknown')}",
+                        "patient": patient_name,
+                        "patient_id": pid,
+                        "session_id": sid,
+                        "session_date": latest_session.get("session_date"),
+                        "type": "clinical_note"
+                    })
+            
+            # Search in clinical observations
+            observations = notes.get("clinical_observations", {})
+            for key, items in observations.items():
+                if isinstance(items, list):
+                    for item in items:
+                        item_lower = str(item).lower()
+                        if any(term in item_lower for term in search_terms):
+                            evidence_found.append({
+                                "text": item,
+                                "source": f"Clinical Notes - {key.replace('_', ' ').title()}",
+                                "patient": patient_name,
+                                "patient_id": pid,
+                                "session_id": sid,
+                                "session_date": latest_session.get("session_date"),
+                                "type": "clinical_observation"
+                            })
+            
+            # Search in risk assessment
+            risk = notes.get("risk_assessment", {})
+            risk_text = json.dumps(risk).lower()
+            if any(term in risk_text for term in search_terms):
+                for risk_type, risk_data in risk.items():
+                    if isinstance(risk_data, dict):
+                        evidence_text = risk_data.get("evidence", "")
+                        if any(term in evidence_text.lower() for term in search_terms):
+                            evidence_found.append({
+                                "text": evidence_text,
+                                "source": f"Clinical Notes - Risk Assessment: {risk_type.replace('_', ' ').title()}",
+                                "patient": patient_name,
+                                "patient_id": pid,
+                                "session_id": sid,
+                                "session_date": latest_session.get("session_date"),
+                                "type": "risk_assessment"
+                            })
+        
+        # Search in transcript
+        transcript = get_session_transcript(pid, sid, include_segments=True)
+        if transcript and transcript.get("text"):
+            transcript_text = transcript["text"].lower()
+            if any(term in transcript_text for term in search_terms):
+                # Find relevant segments
+                for segment in transcript.get("segments", []):
+                    segment_text = segment.get("text", "").lower()
+                    if any(term in segment_text for term in search_terms):
+                        evidence_found.append({
+                            "text": segment.get("text", "").strip(),
+                            "source": "Session Transcript",
+                            "patient": patient_name,
+                            "patient_id": pid,
+                            "session_id": sid,
+                            "session_date": latest_session.get("session_date"),
+                            "timestamp": f"{segment.get('start', 0):.1f}s - {segment.get('end', 0):.1f}s",
+                            "type": "transcript"
+                        })
+    
+    # Format response
+    if not evidence_found:
+        return json.dumps({
+            "status": "no_evidence",
+            "query": search_query,
+            "patients_searched": len(patients_to_search),
+            "message": f"No evidence found for '{search_query}' in {len(patients_to_search)} patient(s)"
+        })
+    
+    # Return formatted evidence
+    return format_evidence_response(evidence_found, search_query)
+
+
+# ---------------------------------------------------------------------------
 # Practice Analytics Tool
 # ---------------------------------------------------------------------------
 
@@ -383,6 +522,7 @@ def get_practice_analytics(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 ALL_TOOLS = [
+    search_clinical_evidence,  # NEW - Evidence mode tool
     find_patient,
     list_all_patients,
     get_patient_record,
