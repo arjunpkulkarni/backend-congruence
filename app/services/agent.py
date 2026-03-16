@@ -15,7 +15,7 @@ Key changes from Iteration 1:
 
 import os
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
@@ -24,6 +24,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from app.models.schemas import AgentChatRequest, AgentChatResponse, AgentAction
 from app.services.agent_tools import ALL_TOOLS
 from app.services.agent_intent import classify_intent
+from app.services.database import get_conversation_db
+from app.models.conversation import MessageCreate
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +139,8 @@ Always confirm what action was taken and what was generated.
 class CongruenceOpsAgent:
     def __init__(self):
         self.llm = self._initialize_llm()
-        # Per-user conversation history: user_id -> list of messages
+        self.db = get_conversation_db()
+        # Fallback in-memory history if DB not available
         self._histories: Dict[str, list] = {}
 
     # -- LLM --
@@ -154,13 +157,44 @@ class CongruenceOpsAgent:
         )
 
     # -- History --
-    def _get_history(self, user_id: str) -> list:
+    async def _get_history(self, conversation_id: Optional[str], user_id: str) -> list:
+        """
+        Load conversation history from database or fallback to in-memory.
+        
+        Args:
+            conversation_id: UUID of the conversation (if continuing existing chat)
+            user_id: User ID for in-memory fallback
+        
+        Returns:
+            List of LangChain messages (HumanMessage, AIMessage)
+        """
+        # Try to load from database if conversation_id provided
+        if conversation_id and self.db.is_enabled():
+            try:
+                from uuid import UUID
+                messages = await self.db.get_conversation_messages(UUID(conversation_id))
+                
+                # Convert to LangChain messages
+                history = []
+                for msg in messages:
+                    if msg.message_type == "user":
+                        history.append(HumanMessage(content=msg.content))
+                    elif msg.message_type == "agent":
+                        history.append(AIMessage(content=msg.content))
+                
+                logger.info(f"Loaded {len(history)} messages from DB for conversation {conversation_id}")
+                return history
+                
+            except Exception as e:
+                logger.warning(f"Failed to load history from DB: {e}, falling back to in-memory")
+        
+        # Fallback to in-memory history
         if user_id not in self._histories:
             self._histories[user_id] = []
         return self._histories[user_id]
 
     def _trim_history(self, user_id: str, max_turns: int = 10) -> None:
-        """Keep only the last max_turns pairs of messages."""
+        """Keep only the last max_turns pairs of messages (in-memory only)."""
         hist = self._histories.get(user_id, [])
         if len(hist) > max_turns * 2:
             self._histories[user_id] = hist[-(max_turns * 2):]
@@ -204,7 +238,12 @@ class CongruenceOpsAgent:
             
             # STEP 2: BUILD AGENT WITH MODE-SPECIFIC PROMPT
             agent = self._build_agent(request.role, mode=intent.mode)
-            history = self._get_history(request.user_id)
+            
+            # Get conversation_id from context if provided
+            conversation_id = request.context.get("conversation_id") if request.context else None
+            
+            # Load history from DB or in-memory
+            history = await self._get_history(conversation_id, request.user_id)
 
             # STEP 3: ADD MODE-SPECIFIC CONTEXT TO MESSAGE
             # For evidence mode, emphasize the search terms
@@ -240,10 +279,44 @@ class CongruenceOpsAgent:
                         response_text = msg.content
                         break
 
-            # Update conversation history (with original message, not enhanced)
-            history.append(HumanMessage(content=request.message))
-            history.append(AIMessage(content=response_text))
-            self._trim_history(request.user_id)
+            # STEP 6: PERSIST TO DATABASE (if enabled and conversation_id provided)
+            if conversation_id and self.db.is_enabled():
+                try:
+                    from uuid import UUID
+                    
+                    # Save user message
+                    await self.db.add_message(MessageCreate(
+                        conversation_id=UUID(conversation_id),
+                        message_type="user",
+                        content=request.message,
+                        actions=None,
+                        metadata=None
+                    ))
+                    
+                    # Save agent response
+                    await self.db.add_message(MessageCreate(
+                        conversation_id=UUID(conversation_id),
+                        message_type="agent",
+                        content=response_text,
+                        actions=[action.dict() for action in self._generate_actions(response_text, request.role)],
+                        metadata={
+                            "tools_used": list(set(tools_used)),
+                            "intent_mode": intent.mode,
+                            "intent_confidence": intent.confidence,
+                            "model_used": self.llm.model_name,
+                        }
+                    ))
+                    
+                    logger.info(f"Saved conversation to DB: {conversation_id}")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to save to DB: {e}, continuing with in-memory")
+            
+            # Update in-memory history as fallback
+            if not conversation_id or not self.db.is_enabled():
+                history.append(HumanMessage(content=request.message))
+                history.append(AIMessage(content=response_text))
+                self._trim_history(request.user_id)
 
             # Generate contextual actions
             actions = self._generate_actions(response_text, request.role)
@@ -256,8 +329,9 @@ class CongruenceOpsAgent:
                 metadata={
                     "model_used": self.llm.model_name,
                     "tools_available": [t.name for t in self._tools_for_role(request.role)],
-                    "intent_mode": intent.mode,  # NEW - expose mode to frontend
+                    "intent_mode": intent.mode,
                     "intent_confidence": intent.confidence,
+                    "conversation_id": conversation_id,  # Return conversation_id to frontend
                 },
             )
 

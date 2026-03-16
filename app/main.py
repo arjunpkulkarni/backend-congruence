@@ -16,6 +16,13 @@ from app.models.schemas import (
     AgentChatRequest,
     AgentChatResponse,
 )
+from app.models.conversation import (
+    ConversationCreate,
+    ConversationUpdate,
+    Conversation,
+    ConversationWithMessages,
+    ConversationListItem,
+)
 from app.services.video_processing import (
     download_video_file,
     extract_audio_with_ffmpeg,
@@ -39,6 +46,7 @@ from app.services.simplified_notes import (
 )
 from app.services.notes import generate_therapist_notes, save_therapist_notes
 from app.services.agent import get_agent
+from app.services.database import get_conversation_db
 from app.services.data_access import (
     list_patients as da_list_patients,
     list_sessions as da_list_sessions,
@@ -390,16 +398,124 @@ def agent_status() -> Dict[str, Any]:
     try:
         agent = get_agent()
         from app.services.agent_tools import ALL_TOOLS
+        db = get_conversation_db()
 
         return {
             "status": "ready",
             "model": agent.llm.model_name,
             "tools_count": len(ALL_TOOLS),
             "tools": [t.name for t in ALL_TOOLS],
+            "database_enabled": db.is_enabled(),
             "message": "Congruence Ops Agent is ready (Iteration 2 - real data access)",
         }
     except Exception as e:
         return {"status": "error", "message": f"Agent initialization failed: {e}"}
+
+
+# =====================================================================
+# Conversation Management API (Database Persistence)
+# =====================================================================
+
+@app.post("/conversations", response_model=Conversation)
+async def create_conversation(
+    data: ConversationCreate,
+    user_id: str = Query(..., description="User ID from auth")
+) -> Conversation:
+    """Create a new conversation."""
+    from uuid import UUID
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    
+    conversation = await db.create_conversation(UUID(user_id), data)
+    if not conversation:
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+    
+    return conversation
+
+
+@app.get("/conversations", response_model=List[ConversationListItem])
+async def list_conversations(
+    user_id: str = Query(..., description="User ID from auth"),
+    limit: int = Query(50, ge=1, le=100)
+) -> List[ConversationListItem]:
+    """List all conversations for the current user."""
+    from uuid import UUID
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        return []
+    
+    return await db.list_conversations(UUID(user_id), limit=limit)
+
+
+@app.get("/conversations/{conversation_id}", response_model=ConversationWithMessages)
+async def get_conversation(
+    conversation_id: str,
+    user_id: str = Query(..., description="User ID from auth")
+) -> ConversationWithMessages:
+    """Get a conversation with all its messages."""
+    from uuid import UUID
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    
+    conversation = await db.get_conversation_with_messages(
+        UUID(conversation_id),
+        UUID(user_id)
+    )
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return conversation
+
+
+@app.patch("/conversations/{conversation_id}", response_model=Conversation)
+async def update_conversation(
+    conversation_id: str,
+    data: ConversationUpdate,
+    user_id: str = Query(..., description="User ID from auth")
+) -> Conversation:
+    """Update a conversation (e.g., change title or link to patient)."""
+    from uuid import UUID
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    
+    conversation = await db.update_conversation(
+        UUID(conversation_id),
+        UUID(user_id),
+        data
+    )
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return conversation
+
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str = Query(..., description="User ID from auth")
+) -> Dict[str, str]:
+    """Delete a conversation and all its messages."""
+    from uuid import UUID
+    db = get_conversation_db()
+    
+    if not db.is_enabled():
+        raise HTTPException(status_code=503, detail="Database not configured")
+    
+    success = await db.delete_conversation(UUID(conversation_id), UUID(user_id))
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return {"status": "deleted", "conversation_id": conversation_id}
 
 
 # =====================================================================
