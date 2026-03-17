@@ -159,22 +159,59 @@ def _list_session_timestamps(patient_dir: str) -> List[int]:
                 continue
     return sorted(timestamps)
 
-def list_sessions(patient_id: str) -> List[Dict[str, Any]]:
-    """
-    List all sessions for a given patient, sorted by timestamp descending.
-
-    Returns a list of dicts with basic session metadata.
-    """
+def list_sessions(patient_id: str) -> List[Dict[str, Any]]:    
+    from app.services.database import get_conversation_db
+    
+    sessions: List[Dict[str, Any]] = []
+    
+    db = get_conversation_db()
+    if db.is_enabled():
+        try:
+            response = db.client.table("session_videos")\
+                .select("*, session_analysis(*)")\
+                .eq("patient_id", patient_id)\
+                .order("created_at", desc=True)\
+                .execute()
+            
+            if response.data:
+                logger.info(f"Found {len(response.data)} sessions in Supabase for patient {patient_id}")
+                
+                for video in response.data:
+                    analysis_list = video.get("session_analysis", [])
+                    analysis_data = analysis_list[0] if analysis_list else {}
+                    
+                    sessions.append({
+                        "session_id": video["id"],
+                        "session_date": video.get("created_at"),
+                        "patient_id": patient_id,
+                        "title": video.get("title"),
+                        "has_summary": bool(analysis_data.get("summary")),
+                        "has_notes": analysis_data.get("key_moments") is not None,
+                        "has_transcript": video.get("status") == "analyzed",
+                        "duration": video.get("duration_seconds"),
+                        "overall_congruence": analysis_data.get("avg_tecs"),
+                        "status": video.get("status"),
+                        "video_path": video.get("video_path"),
+                    })
+                
+                # If we found sessions in database, return them
+                if sessions:
+                    return sessions
+                    
+        except Exception as e:
+            logger.warning(f"Failed to load sessions from Supabase for {patient_id}: {e}")
+            # Continue to filesystem fallback
+    
+    # Fallback to filesystem (for legacy data or local processing)
     root = _resolve_data_root()
     patient_dir = os.path.join(root, patient_id)
 
     if not os.path.isdir(patient_dir):
-        logger.warning("Patient directory not found: %s", patient_dir)
+        logger.debug("Patient directory not found on filesystem: %s", patient_dir)
         return []
 
     timestamps = _list_session_timestamps(patient_dir)
-    sessions: List[Dict[str, Any]] = []
-
+    
     for ts in reversed(timestamps):
         session_dir = os.path.join(patient_dir, str(ts))
         outputs_dir = os.path.join(session_dir, "outputs")
@@ -200,15 +237,49 @@ def list_sessions(patient_id: str) -> List[Dict[str, Any]]:
 
 def get_session_summary(patient_id: str, session_id: int) -> Optional[Dict[str, Any]]:
     """
-    Read the session_summary.json for a specific session.
+    Read the session summary for a specific session.
+    Tries Supabase first, then falls back to filesystem.
 
     Contains: overall_congruence, incongruent_moments, emotion_distribution, metrics.
     """
+    from app.services.database import get_conversation_db
+    
+    # Try Supabase first
+    db = get_conversation_db()
+    if db.is_enabled():
+        try:
+            # session_id is now a UUID for Supabase sessions
+            response = db.client.table("session_analysis")\
+                .select("*")\
+                .eq("session_video_id", str(session_id))\
+                .single()\
+                .execute()
+            
+            if response.data:
+                data = response.data
+                return {
+                    "patient_id": patient_id,
+                    "session_id": session_id,
+                    "session_date": data.get("created_at"),
+                    "overall_congruence": data.get("avg_tecs"),
+                    "duration": data.get("duration_seconds"),
+                    "summary": data.get("summary"),
+                    "emotion_distribution": data.get("emotion_timeline"),
+                    "incongruent_moments": data.get("key_moments", []),
+                    "metrics": {
+                        "avg_tecs": data.get("avg_tecs"),
+                        "congruence_data": data.get("congruence_data"),
+                    }
+                }
+        except Exception as e:
+            logger.warning(f"Failed to load session summary from Supabase: {e}")
+    
+    # Fallback to filesystem
     root = _resolve_data_root()
     path = os.path.join(root, patient_id, str(session_id), "outputs", "session_summary.json")
     data = _read_json(path)
     if data and isinstance(data, dict):
-        data["session_date"] = _ts_to_iso(session_id)
+        data["session_date"] = _ts_to_iso(int(session_id)) if isinstance(session_id, int) else data.get("session_date")
     return data
 
 
@@ -250,11 +321,58 @@ def get_session_transcript(
 
 def get_therapist_notes(patient_id: str, session_id: int) -> Optional[Dict[str, Any]]:
     """
-    Read the structured therapist notes (JSON) for a session.
+    Read the structured therapist notes for a session.
+    Tries Supabase first, then falls back to filesystem.
 
     Contains: session_overview, key_themes, emotional_analysis,
               clinical_observations, risk_assessment, recommendations.
     """
+    from app.services.database import get_conversation_db
+    
+    # Try Supabase first
+    db = get_conversation_db()
+    if db.is_enabled():
+        try:
+            # Get notes from session_notes table
+            response = db.client.table("session_notes")\
+                .select("*")\
+                .eq("session_video_id", str(session_id))\
+                .execute()
+            
+            if response.data:
+                # Combine all notes for this session
+                notes_data = {
+                    "patient_id": patient_id,
+                    "session_id": session_id,
+                    "session_overview": {},
+                    "key_themes": [],
+                    "notes": []
+                }
+                
+                for note in response.data:
+                    notes_data["notes"].append({
+                        "content": note.get("content"),
+                        "created_at": note.get("created_at"),
+                        "file_path": note.get("file_path"),
+                    })
+                
+                # Also get analysis data which may contain structured notes
+                analysis = db.client.table("session_analysis")\
+                    .select("summary, key_moments")\
+                    .eq("session_video_id", str(session_id))\
+                    .single()\
+                    .execute()
+                
+                if analysis.data:
+                    notes_data["session_overview"]["summary"] = analysis.data.get("summary")
+                    notes_data["key_themes"] = analysis.data.get("key_moments", [])
+                
+                return notes_data
+                
+        except Exception as e:
+            logger.warning(f"Failed to load therapist notes from Supabase: {e}")
+    
+    # Fallback to filesystem
     root = _resolve_data_root()
     path = os.path.join(root, patient_id, str(session_id), "outputs", "therapist_notes.json")
     data = _read_json(path)
