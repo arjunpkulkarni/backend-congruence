@@ -409,85 +409,105 @@ def search_clinical_evidence(query: str) -> str:
         pid = patient["patient_id"]
         patient_name = patient.get("name", pid)
         
-        # Get latest session
+        # Get ALL sessions (not just latest)
         sessions = list_sessions(pid)
         if not sessions:
             continue
         
-        latest_session = sessions[0]
-        sid = latest_session["session_id"]
+        # Filter sessions by title if search terms match
+        # This prioritizes sessions with matching titles (e.g., "OCD" session)
+        matching_sessions = []
+        for session in sessions:
+            session_title = session.get("title", "").lower()
+            # If any search term is in the session title, prioritize this session
+            if any(term in session_title for term in search_terms):
+                matching_sessions.append(session)
         
-        # Search in clinical notes
-        notes = get_therapist_notes(pid, sid)
-        if notes:
-            # Search in key themes
-            for theme in notes.get("key_themes", []):
-                theme_text = json.dumps(theme).lower()
-                if any(term in theme_text for term in search_terms):
-                    evidence_found.append({
-                        "text": theme.get("description", ""),
-                        "source": f"Clinical Notes - Theme: {theme.get('theme', 'Unknown')}",
-                        "patient": patient_name,
-                        "patient_id": pid,
-                        "session_id": sid,
-                        "session_date": latest_session.get("session_date"),
-                        "type": "clinical_note"
-                    })
-            
-            # Search in clinical observations
-            observations = notes.get("clinical_observations", {})
-            for key, items in observations.items():
-                if isinstance(items, list):
-                    for item in items:
-                        item_lower = str(item).lower()
-                        if any(term in item_lower for term in search_terms):
-                            evidence_found.append({
-                                "text": item,
-                                "source": f"Clinical Notes - {key.replace('_', ' ').title()}",
-                                "patient": patient_name,
-                                "patient_id": pid,
-                                "session_id": sid,
-                                "session_date": latest_session.get("session_date"),
-                                "type": "clinical_observation"
-                            })
-            
-            # Search in risk assessment
-            risk = notes.get("risk_assessment", {})
-            risk_text = json.dumps(risk).lower()
-            if any(term in risk_text for term in search_terms):
-                for risk_type, risk_data in risk.items():
-                    if isinstance(risk_data, dict):
-                        evidence_text = risk_data.get("evidence", "")
-                        if any(term in evidence_text.lower() for term in search_terms):
-                            evidence_found.append({
-                                "text": evidence_text,
-                                "source": f"Clinical Notes - Risk Assessment: {risk_type.replace('_', ' ').title()}",
-                                "patient": patient_name,
-                                "patient_id": pid,
-                                "session_id": sid,
-                                "session_date": latest_session.get("session_date"),
-                                "type": "risk_assessment"
-                            })
+        # If no title matches, search all sessions
+        if not matching_sessions:
+            matching_sessions = sessions
         
-        # Search in transcript
-        transcript = get_session_transcript(pid, sid, include_segments=True)
-        if transcript and transcript.get("text"):
-            transcript_text = transcript["text"].lower()
-            if any(term in transcript_text for term in search_terms):
-                # Find relevant segments
-                for segment in transcript.get("segments", []):
-                    segment_text = segment.get("text", "").lower()
-                    if any(term in segment_text for term in search_terms):
+        # Now search within matching sessions
+        for session in matching_sessions:
+            sid = session["session_id"]
+            session_title = session.get("title", "")
+            session_date = session.get("session_date", "")
+            
+            # Search in clinical notes
+            notes = get_therapist_notes(pid, sid)
+            if notes:
+                # Search in key themes
+                for theme in notes.get("key_themes", []):
+                    theme_text = json.dumps(theme).lower()
+                    if any(term in theme_text for term in search_terms):
                         evidence_found.append({
-                            "text": segment.get("text", "").strip(),
-                            "source": "Session Transcript",
+                            "text": theme.get("description", ""),
+                            "source": f"Clinical Notes - Theme: {theme.get('theme', 'Unknown')}",
                             "patient": patient_name,
                             "patient_id": pid,
                             "session_id": sid,
-                            "session_date": latest_session.get("session_date"),
-                            "timestamp": f"{segment.get('start', 0):.1f}s - {segment.get('end', 0):.1f}s",
-                            "type": "transcript"
+                            "session_title": session_title,
+                            "session_date": session_date,
+                            "type": "clinical_note"
                         })
+                
+                # Search in clinical observations
+                observations = notes.get("clinical_observations", {})
+                for key, items in observations.items():
+                    if isinstance(items, list):
+                        for item in items:
+                            item_lower = str(item).lower()
+                            if any(term in item_lower for term in search_terms):
+                                evidence_found.append({
+                                    "text": item,
+                                    "source": f"Clinical Notes - {key.replace('_', ' ').title()}",
+                                    "patient": patient_name,
+                                    "patient_id": pid,
+                                    "session_id": sid,
+                                    "session_title": session_title,
+                                    "session_date": session_date,
+                                    "type": "clinical_observation"
+                                })
+                
+                # Search in risk assessment
+                risk = notes.get("risk_assessment", {})
+                risk_text = json.dumps(risk).lower()
+                if any(term in risk_text for term in search_terms):
+                    for risk_type, risk_data in risk.items():
+                        if isinstance(risk_data, dict):
+                            evidence_text = risk_data.get("evidence", "")
+                            if any(term in evidence_text.lower() for term in search_terms):
+                                evidence_found.append({
+                                    "text": evidence_text,
+                                    "source": f"Clinical Notes - Risk Assessment: {risk_type.replace('_', ' ').title()}",
+                                    "patient": patient_name,
+                                    "patient_id": pid,
+                                    "session_id": sid,
+                                    "session_title": session_title,
+                                    "session_date": session_date,
+                                    "type": "risk_assessment"
+                                })
+            
+            # Search in transcript
+            transcript = get_session_transcript(pid, sid, include_segments=True)
+            if transcript and transcript.get("text"):
+                transcript_text = transcript["text"].lower()
+                if any(term in transcript_text for term in search_terms):
+                    # Find relevant segments
+                    for segment in transcript.get("segments", []):
+                        segment_text = segment.get("text", "").lower()
+                        if any(term in segment_text for term in search_terms):
+                            evidence_found.append({
+                                "text": segment.get("text", "").strip(),
+                                "source": "Session Transcript",
+                                "patient": patient_name,
+                                "patient_id": pid,
+                                "session_id": sid,
+                                "session_title": session_title,
+                                "session_date": session_date,
+                                "timestamp": f"{segment.get('start', 0):.1f}s - {segment.get('end', 0):.1f}s",
+                                "type": "transcript"
+                            })
     
     # Format response
     if not evidence_found:
