@@ -75,11 +75,14 @@ jobs:
           ./ root@${{ secrets.DROPLET_IP }}:/opt/congruence/
           
         # Deploy application
-        ssh root@${{ secrets.DROPLET_IP }} << ENDSSH
+        ssh root@${{ secrets.DROPLET_IP }} << 'ENDSSH'
           cd /opt/congruence
           
-          # Create/update .env file
+          # Create/update .env file with all secrets
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
           
           # Create data directories
           mkdir -p data/sessions data/media
