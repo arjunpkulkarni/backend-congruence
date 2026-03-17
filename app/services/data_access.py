@@ -1,14 +1,3 @@
-"""
-Data Access Layer for the Congruence Ops Agent.
-
-Provides structured access to session data stored on disk under
-  data/sessions/{patient_id}/{session_ts}/outputs/
-
-This module reads the same files that the processing pipeline writes,
-giving the agent (and future API routes) a clean interface to query
-patient records, session transcripts, clinical notes, and analytics.
-"""
-
 import json
 import logging
 import os
@@ -17,10 +6,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 DATA_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sessions")
 PATIENTS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "patients.json")
@@ -173,11 +158,6 @@ def _list_session_timestamps(patient_dir: str) -> List[int]:
             except ValueError:
                 continue
     return sorted(timestamps)
-
-
-# ---------------------------------------------------------------------------
-# Session-level queries
-# ---------------------------------------------------------------------------
 
 def list_sessions(patient_id: str) -> List[Dict[str, Any]]:
     """
@@ -424,11 +404,6 @@ def get_practice_analytics_data() -> Dict[str, Any]:
         "recent_sessions": recent_sessions,
     }
 
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _summarize_notes(notes: Dict[str, Any]) -> Dict[str, Any]:
     """Extract a compact summary from full therapist notes."""
     overview = notes.get("session_overview", {})
@@ -506,7 +481,7 @@ def search_patients(query: str) -> List[Dict[str, Any]]:
     
     Returns a list of matching patients with their metadata.
     """
-    patients_metadata = _load_patients_from_db()  # Changed to use database
+    patients_metadata = _load_patients_from_db()  
     query_lower = query.lower().strip()
     
     matches: List[Dict[str, Any]] = []
