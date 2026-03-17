@@ -46,12 +46,7 @@ def _load_patients_metadata() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _load_patients_from_db() -> Dict[str, Dict[str, Any]]:
-    """
-    Load patient metadata from Supabase database with fallback to patients.json.
-    
-    Returns dict mapping patient_id -> patient metadata
-    """
+def _load_patients_from_db() -> Dict[str, Dict[str, Any]]:    
     from app.services.database import get_conversation_db
     
     db = get_conversation_db()
@@ -60,15 +55,13 @@ def _load_patients_from_db() -> Dict[str, Dict[str, Any]]:
         logger.debug("Database not enabled, using patients.json")
         return _load_patients_metadata()
     
-    try:
-        # Query patients table from Supabase
+    try:        
         response = db.client.table("patients").select("*").execute()
         
         if not response.data:
             logger.warning("No patients in database, falling back to patients.json")
             return _load_patients_metadata()
         
-        # Convert to dict format matching patients.json structure
         patients_dict = {}
         for patient in response.data:
             patient_id = str(patient["id"])
@@ -122,47 +115,51 @@ def _ts_to_iso(ts: int) -> str:
         return str(ts)
 
 
-# ---------------------------------------------------------------------------
-# Patient-level queries
-# ---------------------------------------------------------------------------
-
 def list_patients() -> List[Dict[str, Any]]:
     """
-    List all patient IDs that have at least one session on disk.
+    List all patients from database, including those with and without sessions.
 
     Returns a list of dicts:
         [{"patient_id": "...", "name": "...", "session_count": N, "latest_session": <ts>}, ...]
     """
     root = _resolve_data_root()
-    patients: List[Dict[str, Any]] = []
-    patients_metadata = _load_patients_from_db()  # Changed to use database
+    patients_dict: Dict[str, Dict[str, Any]] = {}
+    patients_metadata = _load_patients_from_db()  # Load from database
 
-    if not os.path.isdir(root):
-        logger.warning("Sessions root does not exist: %s", root)
-        return patients
-
-    for entry in sorted(os.listdir(root)):
-        patient_dir = os.path.join(root, entry)
-        if not os.path.isdir(patient_dir):
-            continue
-
-        session_timestamps = _list_session_timestamps(patient_dir)
-        if not session_timestamps:
-            continue
-
-        # Get patient metadata if available
-        metadata = patients_metadata.get(entry, {})
-        
-        patients.append({
-            "patient_id": entry,
-            "name": metadata.get("name", entry),  # Fallback to ID if no name
+    # First, add all patients from database (even without sessions)
+    for patient_id, metadata in patients_metadata.items():
+        patients_dict[patient_id] = {
+            "patient_id": patient_id,
+            "name": metadata.get("name", patient_id),
             "mrn": None,  # MRN not in database
-            "session_count": len(session_timestamps),
-            "latest_session": max(session_timestamps),
-            "latest_session_date": _ts_to_iso(max(session_timestamps)),
-        })
+            "session_count": 0,
+            "latest_session": None,
+            "latest_session_date": None,
+        }
 
-    return patients
+    # Then, update with session data for patients who have sessions on disk
+    if os.path.isdir(root):
+        for entry in sorted(os.listdir(root)):
+            patient_dir = os.path.join(root, entry)
+            if not os.path.isdir(patient_dir):
+                continue
+
+            session_timestamps = _list_session_timestamps(patient_dir)
+            if not session_timestamps:
+                continue
+
+            # Update or add patient with session info
+            metadata = patients_metadata.get(entry, {})
+            patients_dict[entry] = {
+                "patient_id": entry,
+                "name": metadata.get("name", entry),
+                "mrn": None,
+                "session_count": len(session_timestamps),
+                "latest_session": max(session_timestamps),
+                "latest_session_date": _ts_to_iso(max(session_timestamps)),
+            }
+
+    return list(patients_dict.values())
 
 
 def _list_session_timestamps(patient_dir: str) -> List[int]:
