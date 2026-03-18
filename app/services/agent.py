@@ -1,16 +1,18 @@
 """
-Congruence Ops Agent — Iteration 2
+Congruence Ops Agent — Iteration 3
 
-Uses LangChain's create_agent (v1.2+) with real tools backed by the
-data access layer.  The agent reads actual session data, transcripts,
-clinical notes, and practice analytics from disk.
+Uses LangChain's create_agent (v1.2+) with real tools backed by Supabase.
+The agent reads actual session data, transcripts, clinical notes, and 
+practice analytics from the cloud database.
 
-Key changes from Iteration 1:
-  - Stub tools replaced with real implementations (agent_tools.py)
-  - Tools call into data_access.py which reads data/sessions/ on disk
+Key features:
+  - All data stored in and retrieved from Supabase (cloud-first architecture)
+  - Tools call into data_access.py which queries Supabase tables
   - Agent uses langchain.agents.create_agent with tool-calling loop
-  - Per-user conversation history kept in memory
-  - Role-based tool filtering still enforced
+  - Conversation history persisted in Supabase database
+  - Role-based tool filtering enforced
+  - Intent classification (evidence/summary/action modes)
+  - Multi-session summary support for queries like "last 3 sessions"
 """
 
 import os
@@ -29,24 +31,23 @@ from app.models.conversation import MessageCreate
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Role → permitted tool names
-# ---------------------------------------------------------------------------
 ROLE_PERMISSIONS: Dict[str, List[str]] = {
     "clinician": [
-        "search_clinical_evidence",  # NEW - Evidence mode
+        "search_clinical_evidence",  
         "find_patient",
         "list_all_patients",
         "get_patient_record",
         "get_session_transcript_tool",
         "generate_clinical_note",
+        "get_multiple_sessions_summary",  # NEW - Multi-session summary
         "suggest_icd10_codes",
     ],
     "admin": [
-        "search_clinical_evidence",  # NEW - Evidence mode
+        "search_clinical_evidence", 
         "find_patient",
         "list_all_patients",
         "get_patient_record",
+        "get_multiple_sessions_summary", 
         "generate_insurance_packet",
         "send_intake_form",
         "check_claim_status",
@@ -58,6 +59,7 @@ ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "get_patient_record",
         "get_session_transcript_tool",
         "generate_clinical_note",
+        "get_multiple_sessions_summary",  # NEW - Multi-session summary
         "generate_insurance_packet",
         "suggest_icd10_codes",
         "check_claim_status",
@@ -67,9 +69,6 @@ ROLE_PERMISSIONS: Dict[str, List[str]] = {
     ],
 }
 
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
 SYSTEM_PROMPT_EVIDENCE = """\
 You are the Congruence Ops Agent in EVIDENCE MODE.
 
@@ -109,19 +108,28 @@ You are the Congruence Ops Agent in SUMMARY MODE.
 The user wants a high-level overview or summary of patient data.
 
 CRITICAL RULES:
-1. When the user mentions a specific session (e.g., "OCD session", "anxiety session"):
+1. When the user asks for MULTIPLE sessions (e.g., "last 3 sessions", "recent sessions"):
+   - First call find_patient to get the patient_id
+   - Then call get_multiple_sessions_summary with patient_id and number
+   - Provide a comprehensive summary across all sessions
+2. When the user mentions a specific session (e.g., "OCD session", "anxiety session"):
    - First call find_patient to get the patient_id
    - Then call get_patient_record to see all sessions with their titles
    - Identify which session matches the user's query
    - Use generate_clinical_note with that specific session_id
-2. Call the appropriate tool to fetch the data (notes, transcript, patient record)
-3. Provide a concise summary highlighting key points
-4. Include specific metrics (congruence scores, timestamps) when available
-5. DO NOT make up information - only summarize what the tools return
+3. Call the appropriate tool to fetch the data (notes, transcript, patient record)
+4. Provide a concise summary highlighting key points
+5. Include specific metrics (congruence scores, timestamps) when available
+6. DO NOT make up information - only summarize what the tools return
 
 When the user mentions a patient name, call find_patient first to get patient_id.
 
-Example flow:
+Example flows:
+User: "Summarize my last 3 sessions with Sophia"
+You: 
+  1. find_patient("Sophia") -> get patient_id
+  2. get_multiple_sessions_summary(patient_id 3) -> Get summaries of last 3 sessions
+
 User: "Tell me about Sophia's OCD session"
 You: 
   1. find_patient("Sophia") -> get patient_id
@@ -155,9 +163,6 @@ Always confirm what action was taken and what was generated.
 """
 
 
-# ---------------------------------------------------------------------------
-# Agent class
-# ---------------------------------------------------------------------------
 class CongruenceOpsAgent:
     def __init__(self):
         self.llm = self._initialize_llm()
@@ -399,9 +404,7 @@ class CongruenceOpsAgent:
         return actions
 
 
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
+
 _agent_instance = None
 
 

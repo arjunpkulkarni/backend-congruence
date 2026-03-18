@@ -28,6 +28,7 @@ from app.services.data_access import (
     resolve_session,
     find_patient_by_name,
     search_patients,
+    get_multiple_session_summaries,
 )
 from app.services.agent_intent import format_evidence_response
 
@@ -136,7 +137,15 @@ def get_session_transcript_tool(query: str) -> str:
         return "Error: provide patient_id (and optionally session_id)."
 
     patient_id = parts[0]
-    session_id = int(parts[1]) if len(parts) > 1 else None
+    # Handle both UUID strings and integer timestamps
+    if len(parts) > 1:
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            # It's a UUID string, keep as is
+            session_id = parts[1]
+    else:
+        session_id = None
     session_id = resolve_session(patient_id, session_id)
 
     if session_id is None:
@@ -165,7 +174,15 @@ def generate_clinical_note(query: str) -> str:
         return "Error: provide patient_id (and optionally session_id)."
 
     patient_id = parts[0]
-    session_id = int(parts[1]) if len(parts) > 1 else None
+    # Handle both UUID strings and integer timestamps
+    if len(parts) > 1:
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            # It's a UUID string, keep as is
+            session_id = parts[1]
+    else:
+        session_id = None
     session_id = resolve_session(patient_id, session_id)
 
     if session_id is None:
@@ -198,6 +215,33 @@ def generate_clinical_note(query: str) -> str:
     return _json_compact(result, max_len=4000)
 
 
+@tool
+def get_multiple_sessions_summary(query: str) -> str:
+    """
+    Retrieve summaries for the last N sessions for a patient.
+    Useful when the user asks for "last 3 sessions", "recent sessions", etc.
+    Query format: 'patient_id' or 'patient_id N' where N is the number of sessions.
+    Example: 'sophia-uuid 3' or just 'sophia-uuid' (defaults to 3 sessions)
+    """
+    parts = query.strip().split()
+    if not parts:
+        return "Error: provide patient_id (and optionally number of sessions)."
+    
+    patient_id = parts[0]
+    num_sessions = int(parts[1]) if len(parts) > 1 else 3
+    
+    # Validate num_sessions
+    if num_sessions < 1 or num_sessions > 10:
+        return "Error: number of sessions must be between 1 and 10."
+    
+    result = get_multiple_session_summaries(patient_id, num_sessions)
+    
+    if result.get("sessions_count", 0) == 0:
+        return f"No sessions found for patient '{patient_id}'."
+    
+    return _json_compact(result, max_len=6000)
+
+
 # ---------------------------------------------------------------------------
 # ICD-10 Suggestion Tool
 # ---------------------------------------------------------------------------
@@ -215,7 +259,15 @@ def suggest_icd10_codes(query: str) -> str:
         return "Error: provide patient_id (and optionally session_id)."
 
     patient_id = parts[0]
-    session_id = int(parts[1]) if len(parts) > 1 else None
+    # Handle both UUID strings and integer timestamps
+    if len(parts) > 1:
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            # It's a UUID string, keep as is
+            session_id = parts[1]
+    else:
+        session_id = None
     session_id = resolve_session(patient_id, session_id)
 
     if session_id is None:
@@ -271,7 +323,15 @@ def generate_insurance_packet(query: str) -> str:
         return "Error: provide patient_id (and optionally session_id)."
 
     patient_id = parts[0]
-    session_id = int(parts[1]) if len(parts) > 1 else None
+    # Handle both UUID strings and integer timestamps
+    if len(parts) > 1:
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            # It's a UUID string, keep as is
+            session_id = parts[1]
+    else:
+        session_id = None
     session_id = resolve_session(patient_id, session_id)
 
     if session_id is None:
@@ -548,6 +608,7 @@ ALL_TOOLS = [
     get_patient_record,
     get_session_transcript_tool,
     generate_clinical_note,
+    get_multiple_sessions_summary,  # NEW - Multi-session summary tool
     suggest_icd10_codes,
     generate_insurance_packet,
     check_claim_status,
