@@ -45,6 +45,8 @@ from app.services.simplified_notes import (
     save_simplified_outputs,
 )
 from app.services.notes import generate_therapist_notes, save_therapist_notes
+from app.services.fact_extraction import extract_facts_from_therapist_notes, extract_facts_from_analysis
+from app.services.clinical_state import update_patient_clinical_state
 from app.services.agent import get_agent
 from app.services.database import get_conversation_db
 from app.services.data_access import (
@@ -327,6 +329,51 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                     logger.info("Therapist notes generation skipped")
             except Exception as exc:
                 logger.exception("Therapist notes generation failed (non-critical): %s", exc)
+        
+        # NEW: Extract session facts and update clinical state
+        # This happens after all analysis is complete
+        session_video_id = None
+        if locals().get("session_summary") or therapist_notes:
+            logger.info("Post-processing: Extracting session facts...")
+            try:
+                # Get the session_video_id from Supabase (query by patient_id and timestamp)
+                db = get_conversation_db()
+                if db.is_enabled():
+                    # Find the most recent session_video for this patient (just created)
+                    video_query = db.client.table("session_videos")\
+                        .select("id")\
+                        .eq("patient_id", payload.patient_id)\
+                        .order("created_at", desc=True)\
+                        .limit(1)\
+                        .execute()
+                    
+                    if video_query.data:
+                        session_video_id = video_query.data[0]["id"]
+                        
+                        # Extract facts from therapist notes or session summary
+                        if therapist_notes:
+                            extract_facts_from_therapist_notes(
+                                session_video_id=session_video_id,
+                                patient_id=payload.patient_id,
+                                therapist_notes=therapist_notes
+                            )
+                        elif locals().get("session_summary"):
+                            extract_facts_from_analysis(
+                                session_video_id=session_video_id,
+                                patient_id=payload.patient_id,
+                                session_summary=locals().get("session_summary")
+                            )
+                        
+                        logger.info("Session facts extraction completed")
+                        
+                        # Update patient clinical state
+                        logger.info("Updating patient clinical state...")
+                        update_patient_clinical_state(patient_id=payload.patient_id)
+                        logger.info("Patient clinical state updated")
+                    else:
+                        logger.warning("Could not find session_video record to link facts")
+            except Exception as exc:
+                logger.exception("Post-processing (facts/state) failed (non-critical): %s", exc)
 
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
