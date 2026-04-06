@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional, Literal
-from pydantic import BaseModel, Field, HttpUrl, validator
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 class ProcessSessionRequest(BaseModel):
@@ -8,11 +8,11 @@ class ProcessSessionRequest(BaseModel):
     patient_id: str = Field(..., description="Patient or subject identifier")
     spike_threshold: float = Field(0.2, ge=0.0, le=1.0, description="Delta threshold for spike detection")
     
-    @validator('audio_url')
-    def at_least_one_url_required(cls, v, values):
-        if not v and not values.get('video_url'):
+    @model_validator(mode='after')
+    def at_least_one_url_required(self):
+        if not self.video_url and not self.audio_url:
             raise ValueError('Either video_url or audio_url must be provided')
-        return v
+        return self
 
 
 class ProcessSessionResponse(BaseModel):

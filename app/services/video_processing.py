@@ -1,7 +1,6 @@
 import os
 import subprocess
 import shutil
-from typing import Optional
 
 import requests
 
@@ -43,6 +42,21 @@ def extract_audio_with_ffmpeg(input_video_path: str, output_audio_path: str) -> 
         raise RuntimeError(f"ffmpeg audio extraction failed: {completed.stderr.decode(errors='ignore')}")
 
 
+def has_video_stream(input_path: str) -> bool:
+    """Check if a media file has a video stream."""
+    _ensure_ffmpeg_exists()
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_type",
+        "-of", "csv=p=0",
+        input_path
+    ]
+    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return completed.returncode == 0 and "video" in completed.stdout.decode().lower()
+
+
 def extract_frames_with_ffmpeg(
     input_video_path: str,
     frames_dir: str,
@@ -51,6 +65,11 @@ def extract_frames_with_ffmpeg(
 ) -> None:
     _ensure_ffmpeg_exists()
     os.makedirs(frames_dir, exist_ok=True)
+    
+    # Check if the file has a video stream
+    if not has_video_stream(input_video_path):
+        raise RuntimeError(f"No video stream found in {input_video_path}. File appears to be audio-only.")
+    
     output_pattern = os.path.join(frames_dir, filename_pattern)
     cmd = [
         "ffmpeg",
@@ -63,7 +82,7 @@ def extract_frames_with_ffmpeg(
         "-vf",
         f"fps={fps},format=yuv420p",
         # Handle variable frame rates properly (important for fractional fps like 0.3)
-        "-vsync", "vfr",
+        "-fps_mode", "vfr",  # Use -fps_mode instead of deprecated -vsync
         # Ignore rotation metadata after applying it (prevents double rotation)
         "-metadata:s:v", "rotate=0",
         output_pattern,

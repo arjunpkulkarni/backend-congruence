@@ -29,6 +29,7 @@ from app.services.video_processing import (
     extract_audio_with_ffmpeg,
     convert_audio_to_wav,
     extract_frames_with_ffmpeg,
+    has_video_stream,
 )
 from app.services.analysis import (
     analyze_frames_with_deepface,
@@ -202,21 +203,29 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             logger.exception("Audio extraction failed")
             raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
 
-    # 3) Extract frames (only for video input)
+    # 3) Extract frames (only for video input with actual video streams)
     frame_count = 0
     if has_video:
         try:
-            extract_frames_with_ffmpeg(
-                input_video_path=video_path,
-                frames_dir=frames_dir,
-                fps=0.3,
-                filename_pattern="frame_%04d.png",
-            )
-            frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
-            logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
+            # Check if the video file actually has video streams
+            if has_video_stream(video_path):
+                extract_frames_with_ffmpeg(
+                    input_video_path=video_path,
+                    frames_dir=frames_dir,
+                    fps=0.3,
+                    filename_pattern="frame_%04d.png",
+                )
+                frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
+                logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
+            else:
+                logger.info("Video file contains no video stream - treating as audio-only")
+                frame_count = 0
         except Exception as exc:
             logger.exception("Frame extraction failed")
-            raise HTTPException(status_code=500, detail=f"Frame extraction failed: {exc}") from exc
+            # Don't fail the entire pipeline for frame extraction issues
+            # Log the error but continue with audio-only processing
+            logger.warning("Continuing with audio-only processing due to frame extraction failure")
+            frame_count = 0
     else:
         logger.info("Skipping frame extraction for audio-only input")
 
