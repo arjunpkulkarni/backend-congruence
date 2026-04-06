@@ -185,10 +185,11 @@ def _merge_emotions(face: Dict[str, float], audio: Dict[str, float]) -> Dict[str
 
 
 def merge_timelines(
-    facial_timeline: List[Dict[str, Any]],
-    audio_timeline: List[Dict[str, Any]],
+    facial_timeline: Optional[List[Dict[str, Any]]] = None,
+    audio_timeline: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """
+    Merge facial and audio emotion timelines. Works with audio-only or video-only data.
     Returns entries of form:
       {
         "t": second,
@@ -198,13 +199,52 @@ def merge_timelines(
         "micro_spike": False
       }
     """
+    # Handle missing data gracefully
+    if not facial_timeline and not audio_timeline:
+        return []
+    
+    # Default neutral emotions for missing modalities
+    neutral_emotions = {"neutral": 1.0, "joy": 0.0, "sadness": 0.0, "anger": 0.0, 
+                       "fear": 0.0, "disgust": 0.0, "surprise": 0.0}
+    
+    if not facial_timeline:
+        # Audio-only mode: use audio timeline as base
+        merged: List[Dict[str, Any]] = []
+        for entry in audio_timeline:
+            aud_em = entry.get("emotions", {})
+            combined = _merge_emotions(neutral_emotions, aud_em)
+            merged.append({
+                "t": entry["t"],
+                "face": neutral_emotions,
+                "audio": aud_em,
+                "combined": combined,
+                "micro_spike": False,
+            })
+        return merged
+    
+    if not audio_timeline:
+        # Video-only mode: use facial timeline as base
+        merged: List[Dict[str, Any]] = []
+        for entry in facial_timeline:
+            face_em = entry.get("emotions", {})
+            combined = _merge_emotions(face_em, neutral_emotions)
+            merged.append({
+                "t": entry["t"],
+                "face": face_em,
+                "audio": neutral_emotions,
+                "combined": combined,
+                "micro_spike": False,
+            })
+        return merged
+    
+    # Full multimodal mode (existing behavior)
     face_by_t = {e["t"]: e.get("emotions", {}) for e in facial_timeline}
     audio_by_t = {e["t"]: e.get("emotions", {}) for e in audio_timeline}
     all_ts = sorted(set(face_by_t.keys()) | set(audio_by_t.keys()))
     merged: List[Dict[str, Any]] = []
     for t in all_ts:
-        face_em = face_by_t.get(t, {})
-        aud_em = audio_by_t.get(t, {})
+        face_em = face_by_t.get(t, neutral_emotions)
+        aud_em = audio_by_t.get(t, neutral_emotions)
         combined = _merge_emotions(face_em, aud_em)
         merged.append(
             {

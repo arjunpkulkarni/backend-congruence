@@ -1,17 +1,24 @@
 from typing import Any, Dict, List, Optional, Literal
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, validator
 
 
 class ProcessSessionRequest(BaseModel):
-    video_url: HttpUrl = Field(..., description="Publicly accessible URL of the video file (mp4)")
+    video_url: Optional[HttpUrl] = Field(None, description="Publicly accessible URL of the video file (mp4)")
+    audio_url: Optional[HttpUrl] = Field(None, description="Publicly accessible URL of the audio file (wav, mp3, m4a, etc.)")
     patient_id: str = Field(..., description="Patient or subject identifier")
     spike_threshold: float = Field(0.2, ge=0.0, le=1.0, description="Delta threshold for spike detection")
+    
+    @validator('audio_url')
+    def at_least_one_url_required(cls, v, values):
+        if not v and not values.get('video_url'):
+            raise ValueError('Either video_url or audio_url must be provided')
+        return v
 
 
 class ProcessSessionResponse(BaseModel):
     patient_id: str
     session_timestamp: int
-    paths: Dict[str, str]
+    paths: Dict[str, Optional[str]]
     timeline_json: List[Dict[str, Any]]
     spikes_json: List[Dict[str, Any]]
     # Optional enriched outputs for direct API consumption

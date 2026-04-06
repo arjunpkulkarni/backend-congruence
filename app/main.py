@@ -25,7 +25,9 @@ from app.models.conversation import (
 )
 from app.services.video_processing import (
     download_video_file,
+    download_audio_file,
     extract_audio_with_ffmpeg,
+    convert_audio_to_wav,
     extract_frames_with_ffmpeg,
 )
 from app.services.analysis import (
@@ -144,13 +146,21 @@ def api_key_status() -> Dict[str, Any]:
 
 @app.post("/process_session", response_model=ProcessSessionResponse)
 def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
-    """Full video analysis pipeline."""
+    """Full video/audio analysis pipeline - supports both video and audio-only inputs."""
     start_time = time.time()
+    
+    # Determine input type
+    has_video = bool(payload.video_url)
+    has_audio_only = bool(payload.audio_url and not payload.video_url)
+    
     logger.info(
-        "process_session START patient_id=%s video_url=%s",
+        "process_session START patient_id=%s video_url=%s audio_url=%s mode=%s",
         payload.patient_id,
         payload.video_url,
+        payload.audio_url,
+        "video" if has_video else "audio-only"
     )
+    
     workspace_root = get_workspace_root()
     session_ts = int(time.time())
     session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
@@ -159,41 +169,56 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         session_ts=session_ts,
     )
 
-    video_path = os.path.join(media_dir, "input.mp4")
+    video_path = os.path.join(media_dir, "input.mp4") if has_video else None
     audio_path = os.path.join(media_dir, "audio.wav")
 
-    # 1) Download video
+    # 1) Download and process input file
     try:
-        download_video_file(video_url=payload.video_url, destination_path=video_path)
+        if has_video:
+            # Video processing path
+            download_video_file(video_url=payload.video_url, destination_path=video_path)
+            logger.info("Video downloaded to %s", video_path)
+        elif has_audio_only:
+            # Audio-only processing path
+            audio_input_path = os.path.join(media_dir, "input_audio")
+            download_audio_file(audio_url=payload.audio_url, destination_path=audio_input_path)
+            logger.info("Audio downloaded to %s", audio_input_path)
+            # Convert to standard WAV format
+            convert_audio_to_wav(input_audio_path=audio_input_path, output_audio_path=audio_path)
+            logger.info("Audio converted to %s", audio_path)
     except Exception as exc:
         with contextlib.suppress(Exception):
             if os.path.isdir(session_dir):
                 shutil.rmtree(session_dir)
-        logger.exception("Video download failed")
-        raise HTTPException(status_code=400, detail=f"Video download failed: {exc}") from exc
-    logger.info("Video downloaded to %s", video_path)
+        logger.exception("Input file download failed")
+        raise HTTPException(status_code=400, detail=f"Input file download failed: {exc}") from exc
 
-    # 2) Extract audio
-    try:
-        extract_audio_with_ffmpeg(input_video_path=video_path, output_audio_path=audio_path)
-    except Exception as exc:
-        logger.exception("Audio extraction failed")
-        raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
-    logger.info("Audio extracted to %s", audio_path)
+    # 2) Extract audio (only for video input)
+    if has_video:
+        try:
+            extract_audio_with_ffmpeg(input_video_path=video_path, output_audio_path=audio_path)
+            logger.info("Audio extracted to %s", audio_path)
+        except Exception as exc:
+            logger.exception("Audio extraction failed")
+            raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
 
-    # 3) Extract frames
-    try:
-        extract_frames_with_ffmpeg(
-            input_video_path=video_path,
-            frames_dir=frames_dir,
-            fps=0.3,
-            filename_pattern="frame_%04d.png",
-        )
-    except Exception as exc:
-        logger.exception("Frame extraction failed")
-        raise HTTPException(status_code=500, detail=f"Frame extraction failed: {exc}") from exc
-    frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
-    logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
+    # 3) Extract frames (only for video input)
+    frame_count = 0
+    if has_video:
+        try:
+            extract_frames_with_ffmpeg(
+                input_video_path=video_path,
+                frames_dir=frames_dir,
+                fps=0.3,
+                filename_pattern="frame_%04d.png",
+            )
+            frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
+            logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
+        except Exception as exc:
+            logger.exception("Frame extraction failed")
+            raise HTTPException(status_code=500, detail=f"Frame extraction failed: {exc}") from exc
+    else:
+        logger.info("Skipping frame extraction for audio-only input")
 
     logger.info("Starting parallel analysis...")
     parallel_start = time.time()
@@ -215,13 +240,17 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 return None, None
 
         async def async_deepface():
-            try:
-                result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir)
-                logger.info("DeepFace analysis completed entries=%d", len(result))
-                return result
-            except Exception as exc:
-                logger.exception("DeepFace analysis failed")
-                raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
+            if has_video and frame_count > 0:
+                try:
+                    result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir)
+                    logger.info("DeepFace analysis completed entries=%d", len(result))
+                    return result
+                except Exception as exc:
+                    logger.exception("DeepFace analysis failed")
+                    raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
+            else:
+                logger.info("Skipping DeepFace analysis for audio-only input")
+                return None
 
         async def async_audio_emotion():
             try:
@@ -384,9 +413,9 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         paths={
             "session_dir": session_dir,
             "media_dir": media_dir,
-            "frames_dir": frames_dir,
+            "frames_dir": frames_dir if has_video else None,
             "audio_path": audio_path,
-            "video_path": video_path,
+            "video_path": video_path if has_video else None,
         },
         timeline_json=merged_timeline,
         spikes_json=spikes,
