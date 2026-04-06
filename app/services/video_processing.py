@@ -21,17 +21,6 @@ def download_video_file(video_url: str, destination_path: str, timeout: int = 60
                     dest_file.write(chunk)
 
 
-def download_audio_file(audio_url: str, destination_path: str, timeout: int = 60) -> None:
-    """Download audio file from URL."""
-    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-    with requests.get(audio_url, stream=True, timeout=timeout) as response:
-        response.raise_for_status()
-        with open(destination_path, "wb") as dest_file:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    dest_file.write(chunk)
-
-
 def extract_audio_with_ffmpeg(input_video_path: str, output_audio_path: str) -> None:
     _ensure_ffmpeg_exists()
     os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
@@ -52,26 +41,6 @@ def extract_audio_with_ffmpeg(input_video_path: str, output_audio_path: str) -> 
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"ffmpeg audio extraction failed: {completed.stderr.decode(errors='ignore')}")
-
-
-def convert_audio_to_wav(input_audio_path: str, output_audio_path: str) -> None:
-    """Convert any audio format to WAV using ffmpeg."""
-    _ensure_ffmpeg_exists()
-    os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        input_audio_path,
-        "-acodec",
-        "pcm_s16le",
-        "-ar", "16000",  # Resample to 16kHz (standard for speech recognition)
-        "-ac", "1",      # Convert to mono (sufficient for emotion analysis)
-        output_audio_path,
-    ]
-    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(f"ffmpeg audio conversion failed: {completed.stderr.decode(errors='ignore')}")
 
 
 def extract_frames_with_ffmpeg(
@@ -102,3 +71,35 @@ def extract_frames_with_ffmpeg(
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"ffmpeg frame extraction failed: {completed.stderr.decode(errors='ignore')}")
+
+
+def download_audio_file(audio_url: str, destination_path: str, timeout: int = 60) -> None:
+    """Download audio file from URL."""
+    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    with requests.get(audio_url, stream=True, timeout=timeout) as response:
+        response.raise_for_status()
+        with open(destination_path, "wb") as dest_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    dest_file.write(chunk)
+
+
+def convert_audio_to_wav(input_audio_path: str, output_audio_path: str) -> None:
+    """Convert any audio format to WAV using ffmpeg."""
+    _ensure_ffmpeg_exists()
+    os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_audio_path,
+        "-acodec",
+        "pcm_s16le",
+        "-ar", "16000",  # Resample to 16kHz (standard for speech recognition)
+        "-ac", "1",      # Convert to mono (sufficient for emotion analysis)
+        output_audio_path,
+    ]
+    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio conversion failed: {completed.stderr.decode(errors='ignore')}")
+
