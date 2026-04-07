@@ -185,7 +185,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             download_audio_file(audio_url=payload.audio_url, destination_path=audio_input_path)
             logger.info("Audio downloaded to %s", audio_input_path)
             # Convert to standard WAV format
-            convert_audio_to_wav(input_audio_path=audio_input_path, output_audio_path=audio_path)
+            convert_audio_to_wav(input_audio_path=audio_input_path, output_audio_path=audio_path, fast_mode=payload.fast_mode)
             logger.info("Audio converted to %s", audio_path)
     except Exception as exc:
         with contextlib.suppress(Exception):
@@ -197,7 +197,7 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     # 2) Extract audio (only for video input)
     if has_video:
         try:
-            extract_audio_with_ffmpeg(input_video_path=video_path, output_audio_path=audio_path)
+            extract_audio_with_ffmpeg(input_video_path=video_path, output_audio_path=audio_path, fast_mode=payload.fast_mode)
             logger.info("Audio extracted to %s", audio_path)
         except Exception as exc:
             logger.exception("Audio extraction failed")
@@ -205,15 +205,16 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
 
     # 3) Extract frames (only for video input with actual video streams)
     frame_count = 0
-    if has_video:
+    if has_video and not payload.skip_video_analysis and not payload.no_facial_analysis:
         try:
             # Check if the video file actually has video streams
             if has_video_stream(video_path):
                 extract_frames_with_ffmpeg(
                     input_video_path=video_path,
                     frames_dir=frames_dir,
-                    fps=0.3,
+                    fps=0.1,  # Reduced from 0.3 to 0.1 fps (1 frame every 10 seconds)
                     filename_pattern="frame_%04d.png",
+                    fast_mode=payload.fast_mode,  # Use fast mode based on request
                 )
                 frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
                 logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
@@ -227,7 +228,12 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             logger.warning("Continuing with audio-only processing due to frame extraction failure")
             frame_count = 0
     else:
-        logger.info("Skipping frame extraction for audio-only input")
+        if payload.no_facial_analysis:
+            logger.info("Skipping frame extraction due to no_facial_analysis=True")
+        elif payload.skip_video_analysis:
+            logger.info("Skipping frame extraction due to skip_video_analysis=True")
+        else:
+            logger.info("Skipping frame extraction for audio-only input")
 
     logger.info("Starting parallel analysis...")
     parallel_start = time.time()
@@ -237,8 +243,10 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
 
         async def async_transcription():
             try:
+                # Choose model size based on fast_mode
+                model_size = "tiny" if payload.fast_mode else "small"
                 t_text, t_segments = await loop.run_in_executor(
-                    None, transcribe_audio_with_faster_whisper, audio_path
+                    None, transcribe_audio_with_faster_whisper, audio_path, model_size, "en", True
                 )
                 if t_text:
                     logger.info("Transcription completed chars=%d segments=%d", len(t_text or ""), len(t_segments or []))
@@ -249,16 +257,23 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 return None, None
 
         async def async_deepface():
-            if has_video and frame_count > 0:
+            if has_video and frame_count > 0 and not payload.skip_video_analysis and not payload.no_facial_analysis:
                 try:
-                    result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir)
+                    # Limit frames based on mode - fewer frames in fast mode
+                    max_frames = 10 if payload.fast_mode else 20
+                    result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir, max_frames)
                     logger.info("DeepFace analysis completed entries=%d", len(result))
                     return result
                 except Exception as exc:
                     logger.exception("DeepFace analysis failed")
                     raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
             else:
-                logger.info("Skipping DeepFace analysis for audio-only input")
+                if payload.no_facial_analysis:
+                    logger.info("Skipping DeepFace analysis due to no_facial_analysis=True")
+                elif payload.skip_video_analysis:
+                    logger.info("Skipping DeepFace analysis due to skip_video_analysis=True")
+                else:
+                    logger.info("Skipping DeepFace analysis for audio-only input")
                 return None
 
         async def async_audio_emotion():

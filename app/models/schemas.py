@@ -7,6 +7,9 @@ class ProcessSessionRequest(BaseModel):
     audio_url: Optional[HttpUrl] = Field(None, description="Publicly accessible URL of the audio file (wav, mp3, m4a, etc.)")
     patient_id: str = Field(..., description="Patient or subject identifier")
     spike_threshold: float = Field(0.2, ge=0.0, le=1.0, description="Delta threshold for spike detection")
+    fast_mode: bool = Field(False, description="Enable fast processing mode (reduced accuracy for speed)")
+    skip_video_analysis: bool = Field(False, description="Skip video frame analysis entirely (audio-only processing)")
+    no_facial_analysis: bool = Field(False, description="Skip all facial analysis (frame extraction + DeepFace) for maximum speed")
     
     @model_validator(mode='after')
     def at_least_one_url_required(self):
