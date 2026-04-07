@@ -10,7 +10,7 @@ def _ensure_ffmpeg_exists() -> None:
         raise RuntimeError("ffmpeg is not installed or not in PATH. Please install ffmpeg and retry.")
 
 
-def download_video_file(video_url: str, destination_path: str, timeout: int = 60) -> None:
+def download_video_file(video_url: str, destination_path: str, timeout: int = 600) -> None:
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
     with requests.get(video_url, stream=True, timeout=timeout) as response:
         response.raise_for_status()
@@ -136,7 +136,7 @@ def extract_frames_with_ffmpeg(
         raise RuntimeError(f"ffmpeg frame extraction failed: {completed.stderr.decode(errors='ignore')}")
 
 
-def download_audio_file(audio_url: str, destination_path: str, timeout: int = 60) -> None:
+def download_audio_file(audio_url: str, destination_path: str, timeout: int = 600) -> None:
     """Download audio file from URL."""
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
     with requests.get(audio_url, stream=True, timeout=timeout) as response:
@@ -181,4 +181,61 @@ def convert_audio_to_wav(input_audio_path: str, output_audio_path: str, fast_mod
     completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"ffmpeg audio conversion failed: {completed.stderr.decode(errors='ignore')}")
+
+
+def get_video_duration(video_path: str) -> float:
+    """Get video duration in seconds using ffprobe."""
+    _ensure_ffmpeg_exists()
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path
+    ]
+    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if completed.returncode == 0:
+        try:
+            return float(completed.stdout.decode().strip())
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def extract_audio_chunk(
+    input_video_path: str, 
+    output_audio_path: str, 
+    start_time: float, 
+    duration: float,
+    fast_mode: bool = False
+) -> None:
+    """Extract a specific chunk of audio from video."""
+    _ensure_ffmpeg_exists()
+    os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
+    
+    sample_rate = "8000" if fast_mode else "16000"
+    
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss", str(start_time),  # Start time
+        "-t", str(duration),     # Duration
+        "-i", input_video_path,
+        "-map", "0:a:0",
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", sample_rate,
+        "-ac", "1",
+        output_audio_path,
+    ]
+    
+    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio chunk extraction failed: {completed.stderr.decode(errors='ignore')}")
+
+
+def should_use_chunked_processing(video_path: str, chunk_size_minutes: int = 10) -> bool:
+    """Determine if video should be processed in chunks based on duration."""
+    duration = get_video_duration(video_path)
+    return duration > (chunk_size_minutes * 60)  # Convert minutes to seconds
 

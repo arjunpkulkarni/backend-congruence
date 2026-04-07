@@ -10,6 +10,7 @@ class ProcessSessionRequest(BaseModel):
     fast_mode: bool = Field(False, description="Enable fast processing mode (reduced accuracy for speed)")
     skip_video_analysis: bool = Field(False, description="Skip video frame analysis entirely (audio-only processing)")
     no_facial_analysis: bool = Field(False, description="Skip all facial analysis (frame extraction + DeepFace) for maximum speed")
+    cleanup_files: bool = Field(True, description="Clean up temporary files after processing to save disk space")
     
     @model_validator(mode='after')
     def at_least_one_url_required(self):

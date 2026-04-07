@@ -30,6 +30,7 @@ from app.services.video_processing import (
     convert_audio_to_wav,
     extract_frames_with_ffmpeg,
     has_video_stream,
+    get_video_duration,
 )
 from app.services.analysis import (
     analyze_frames_with_deepface,
@@ -37,7 +38,7 @@ from app.services.analysis import (
     merge_timelines,
     detect_micro_spikes,
 )
-from app.services.transcription import transcribe_audio_with_faster_whisper
+from app.services.transcription import transcribe_audio_with_faster_whisper, transcribe_long_audio_chunked
 from app.services.congruence_engine import (
     build_congruence_timeline,
     build_session_summary,
@@ -65,6 +66,30 @@ from app.utils.paths import (
     get_workspace_root,
     create_session_directories,
 )
+
+
+def cleanup_large_files(session_dir: str, video_path: Optional[str], audio_path: str, frames_dir: str) -> None:
+    """Clean up large temporary files to save disk space after processing long videos."""
+    try:
+        # Remove original video file (keep audio for potential reprocessing)
+        if video_path and os.path.exists(video_path):
+            video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            if video_size_mb > 50:  # Only clean up large files
+                os.remove(video_path)
+                logger.info("Cleaned up video file: %.1f MB", video_size_mb)
+        
+        # Remove frame images (can be regenerated if needed)
+        if os.path.exists(frames_dir):
+            frame_files = glob.glob(os.path.join(frames_dir, "*.png"))
+            if len(frame_files) > 20:  # Only clean up if many frames
+                for frame_file in frame_files:
+                    os.remove(frame_file)
+                logger.info("Cleaned up %d frame files", len(frame_files))
+        
+        # Keep audio file as it's needed for potential reprocessing
+        
+    except Exception as exc:
+        logger.warning("File cleanup failed (non-critical): %s", exc)
 
 import json
 
@@ -161,6 +186,13 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         payload.audio_url,
         "video" if has_video else "audio-only"
     )
+    logger.info(
+        "🔧 PROCESSING OPTIONS: fast_mode=%s no_facial_analysis=%s skip_video_analysis=%s cleanup_files=%s",
+        payload.fast_mode,
+        payload.no_facial_analysis,
+        payload.skip_video_analysis,
+        payload.cleanup_files
+    )
     
     workspace_root = get_workspace_root()
     session_ts = int(time.time())
@@ -177,16 +209,33 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     try:
         if has_video:
             # Video processing path
+            logger.info("Downloading video file (timeout: 10 minutes)...")
             download_video_file(video_url=payload.video_url, destination_path=video_path)
-            logger.info("Video downloaded to %s", video_path)
+            
+            # Log video info for long video handling
+            video_duration = get_video_duration(video_path)
+            video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            logger.info("Video downloaded: %.1f MB, duration: %.1f minutes", video_size_mb, video_duration/60)
+            
+            if video_duration > 3600:  # 60+ minutes
+                logger.info("Long video detected (%.1f min) - using optimized processing", video_duration/60)
         elif has_audio_only:
             # Audio-only processing path
+            logger.info("Downloading audio file (timeout: 10 minutes)...")
             audio_input_path = os.path.join(media_dir, "input_audio")
             download_audio_file(audio_url=payload.audio_url, destination_path=audio_input_path)
-            logger.info("Audio downloaded to %s", audio_input_path)
+            
             # Convert to standard WAV format
             convert_audio_to_wav(input_audio_path=audio_input_path, output_audio_path=audio_path, fast_mode=payload.fast_mode)
-            logger.info("Audio converted to %s", audio_path)
+            
+            # Log audio info
+            from app.services.transcription import get_audio_duration
+            audio_duration = get_audio_duration(audio_path)
+            audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            logger.info("Audio processed: %.1f MB, duration: %.1f minutes", audio_size_mb, audio_duration/60)
+            
+            if audio_duration > 3600:  # 60+ minutes
+                logger.info("Long audio detected (%.1f min) - using chunked processing", audio_duration/60)
     except Exception as exc:
         with contextlib.suppress(Exception):
             if os.path.isdir(session_dir):
@@ -205,6 +254,9 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
 
     # 3) Extract frames (only for video input with actual video streams)
     frame_count = 0
+    logger.info("🎬 FRAME EXTRACTION CHECK: has_video=%s skip_video=%s no_facial=%s", 
+                has_video, payload.skip_video_analysis, payload.no_facial_analysis)
+    
     if has_video and not payload.skip_video_analysis and not payload.no_facial_analysis:
         try:
             # Check if the video file actually has video streams
@@ -245,8 +297,10 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             try:
                 # Choose model size based on fast_mode
                 model_size = "tiny" if payload.fast_mode else "small"
+                
+                # Use chunked transcription for long audio files
                 t_text, t_segments = await loop.run_in_executor(
-                    None, transcribe_audio_with_faster_whisper, audio_path, model_size, "en", True
+                    None, transcribe_long_audio_chunked, audio_path, model_size, "en", True, 10
                 )
                 if t_text:
                     logger.info("Transcription completed chars=%d segments=%d", len(t_text or ""), len(t_segments or []))
@@ -257,10 +311,23 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 return None, None
 
         async def async_deepface():
+            logger.info("🧠 DEEPFACE CHECK: has_video=%s frame_count=%d skip_video=%s no_facial=%s", 
+                        has_video, frame_count, payload.skip_video_analysis, payload.no_facial_analysis)
+            
             if has_video and frame_count > 0 and not payload.skip_video_analysis and not payload.no_facial_analysis:
                 try:
-                    # Limit frames based on mode - fewer frames in fast mode
-                    max_frames = 10 if payload.fast_mode else 20
+                    # Adaptive frame limits based on video duration and mode
+                    video_duration = get_video_duration(video_path) if video_path else 0
+                    
+                    if video_duration > 3600:  # 60+ minutes
+                        max_frames = 5 if payload.fast_mode else 10
+                    elif video_duration > 1800:  # 30+ minutes  
+                        max_frames = 8 if payload.fast_mode else 15
+                    else:  # < 30 minutes
+                        max_frames = 10 if payload.fast_mode else 20
+                    
+                    logger.info("Video duration: %.1f minutes, using max_frames: %d", video_duration/60, max_frames)
+                    
                     result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir, max_frames)
                     logger.info("DeepFace analysis completed entries=%d", len(result))
                     return result
@@ -430,6 +497,11 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
 
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
+
+    # Clean up large temporary files if requested (default: True)
+    if payload.cleanup_files:
+        cleanup_large_files(session_dir, video_path, audio_path, frames_dir)
+        logger.info("Temporary files cleaned up to save disk space")
 
     resp = ProcessSessionResponse(
         patient_id=payload.patient_id,
