@@ -220,17 +220,15 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         payload.cleanup_files
     )
     
-    # Wrap entire processing in try-catch for proper error isolation
-    try:
-        workspace_root = get_workspace_root()
-        session_ts = int(time.time())
-        session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
-            workspace_root=workspace_root,
-            patient_id=payload.patient_id,
-            session_ts=session_ts,
-        )
-        
-        logger.info("[%s] Created unique session directory: %s", request_id, session_dir)
+    workspace_root = get_workspace_root()
+    session_ts = int(time.time())
+    session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
+        workspace_root=workspace_root,
+        patient_id=payload.patient_id,
+        session_ts=session_ts,
+    )
+    
+    logger.info("[%s] Created unique session directory: %s", request_id, session_dir)
 
     video_path = os.path.join(media_dir, "input.mp4") if has_video else None
     audio_path = os.path.join(media_dir, "audio.wav")
@@ -641,56 +639,15 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         transcript_segments=transcript_segments,
         processing_status=processing_status,
     )
-        duration = time.time() - start_time
-        logger.info(
-            "[%s] process_session END patient_id=%s session_ts=%d duration_s=%.2f",
-            request_id,
-            payload.patient_id,
-            session_ts,
-            duration,
-        )
-        return resp
-        
-    except Exception as e:
-        # Comprehensive error handling for concurrent request safety
-        duration = time.time() - start_time
-        logger.error(
-            "[%s] process_session FAILED patient_id=%s duration_s=%.2f error=%s",
-            request_id,
-            payload.patient_id,
-            duration,
-            str(e)
-        )
-        
-        # Return error response with processing status
-        error_status = {
-            "request_id": request_id,
-            "stage": "error",
-            "progress": 0,
-            "message": f"Processing failed: {str(e)}",
-            "errors": [str(e)],
-            "recording_saved": False,
-            "duration_verified": False,
-            "concurrent_safe": True,
-            "error_type": type(e).__name__
-        }
-        
-        # Try to return a valid response even on error
-        try:
-            return ProcessSessionResponse(
-                patient_id=payload.patient_id,
-                session_timestamp=int(time.time()),
-                paths={},
-                timeline_json=[],
-                spikes_json=[],
-                processing_status=error_status,
-            )
-        except Exception:
-            # If even the error response fails, raise HTTP exception
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Session processing failed: {str(e)}"
-            )
+    duration = time.time() - start_time
+    logger.info(
+        "[%s] process_session END patient_id=%s session_ts=%d duration_s=%.2f",
+        request_id,
+        payload.patient_id,
+        session_ts,
+        duration,
+    )
+    return resp
 
 
 # =====================================================================
