@@ -405,11 +405,17 @@ class CongruenceOpsAgent:
 
 
 
+import threading
 _agent_instance = None
+_agent_lock = threading.Lock()
 
 
 def get_agent() -> CongruenceOpsAgent:
+    """Get or create agent singleton (thread-safe)."""
     global _agent_instance
     if _agent_instance is None:
-        _agent_instance = CongruenceOpsAgent()
+        with _agent_lock:
+            # Double-check locking pattern
+            if _agent_instance is None:
+                _agent_instance = CongruenceOpsAgent()
     return _agent_instance

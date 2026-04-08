@@ -183,42 +183,54 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
     """Full video/audio analysis pipeline - supports both video and audio-only inputs."""
     start_time = time.time()
     
+    # Generate unique request ID for tracking concurrent requests
+    import uuid
+    request_id = uuid.uuid4().hex[:8]
+    
     # Determine input type
     has_video = bool(payload.video_url)
     has_audio_only = bool(payload.audio_url and not payload.video_url)
     
     logger.info(
-        "process_session START patient_id=%s video_url=%s audio_url=%s mode=%s",
+        "[%s] process_session START patient_id=%s video_url=%s audio_url=%s mode=%s",
+        request_id,
         payload.patient_id,
         payload.video_url,
         payload.audio_url,
         "video" if has_video else "audio-only"
     )
     
-    # Initialize processing status tracking
+    # Initialize processing status tracking with request isolation
     processing_status = {
+        "request_id": request_id,
         "stage": "initializing",
         "progress": 0,
         "message": "Starting session processing...",
         "errors": [],
         "recording_saved": False,
-        "duration_verified": False
+        "duration_verified": False,
+        "concurrent_safe": True
     }
     logger.info(
-        "🔧 PROCESSING OPTIONS: fast_mode=%s no_facial_analysis=%s skip_video_analysis=%s cleanup_files=%s",
+        "[%s] 🔧 PROCESSING OPTIONS: fast_mode=%s no_facial_analysis=%s skip_video_analysis=%s cleanup_files=%s",
+        request_id,
         payload.fast_mode,
         payload.no_facial_analysis,
         payload.skip_video_analysis,
         payload.cleanup_files
     )
     
-    workspace_root = get_workspace_root()
-    session_ts = int(time.time())
-    session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
-        workspace_root=workspace_root,
-        patient_id=payload.patient_id,
-        session_ts=session_ts,
-    )
+    # Wrap entire processing in try-catch for proper error isolation
+    try:
+        workspace_root = get_workspace_root()
+        session_ts = int(time.time())
+        session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
+            workspace_root=workspace_root,
+            patient_id=payload.patient_id,
+            session_ts=session_ts,
+        )
+        
+        logger.info("[%s] Created unique session directory: %s", request_id, session_dir)
 
     video_path = os.path.join(media_dir, "input.mp4") if has_video else None
     audio_path = os.path.join(media_dir, "audio.wav")
@@ -578,9 +590,8 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                             "local_backup_available": True
                         })
                     else:
-                        # Wait before retry
-                        import time
-                        time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                        # Wait before retry (exponential backoff: 1s, 2s, 4s)
+                        time.sleep(2 ** attempt)
 
     except Exception as exc:
         logger.exception("Failed to write enriched outputs: %s", exc)
@@ -630,14 +641,56 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         transcript_segments=transcript_segments,
         processing_status=processing_status,
     )
-    duration = time.time() - start_time
-    logger.info(
-        "process_session END patient_id=%s session_ts=%d duration_s=%.2f",
-        payload.patient_id,
-        session_ts,
-        duration,
-    )
-    return resp
+        duration = time.time() - start_time
+        logger.info(
+            "[%s] process_session END patient_id=%s session_ts=%d duration_s=%.2f",
+            request_id,
+            payload.patient_id,
+            session_ts,
+            duration,
+        )
+        return resp
+        
+    except Exception as e:
+        # Comprehensive error handling for concurrent request safety
+        duration = time.time() - start_time
+        logger.error(
+            "[%s] process_session FAILED patient_id=%s duration_s=%.2f error=%s",
+            request_id,
+            payload.patient_id,
+            duration,
+            str(e)
+        )
+        
+        # Return error response with processing status
+        error_status = {
+            "request_id": request_id,
+            "stage": "error",
+            "progress": 0,
+            "message": f"Processing failed: {str(e)}",
+            "errors": [str(e)],
+            "recording_saved": False,
+            "duration_verified": False,
+            "concurrent_safe": True,
+            "error_type": type(e).__name__
+        }
+        
+        # Try to return a valid response even on error
+        try:
+            return ProcessSessionResponse(
+                patient_id=payload.patient_id,
+                session_timestamp=int(time.time()),
+                paths={},
+                timeline_json=[],
+                spikes_json=[],
+                processing_status=error_status,
+            )
+        except Exception:
+            # If even the error response fails, raise HTTP exception
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Session processing failed: {str(e)}"
+            )
 
 
 # =====================================================================
@@ -880,6 +933,9 @@ def api_upload_note_style(request: UploadNoteStyleRequest) -> NoteStyleResponse:
     Extracts text from PDF/DOCX/TXT files and analyzes the writing style
     for future note generation matching.
     """
+    import uuid
+    request_id = uuid.uuid4().hex[:8]
+    logger.info("[%s] Note style upload started for user %s", request_id, request.user_id[:8])
     from app.services.note_style import (
         extract_text_from_file, 
         get_preview_text, 
@@ -1000,6 +1056,9 @@ def api_generate_notes_with_style(request: GenerateNotesWithStyleRequest) -> Gen
     the generated notes will match that style. Otherwise, 
     falls back to standard note generation.
     """
+    import uuid
+    request_id = uuid.uuid4().hex[:8]
+    logger.info("[%s] Style-matched note generation started", request_id)
     from datetime import datetime
     
     try:

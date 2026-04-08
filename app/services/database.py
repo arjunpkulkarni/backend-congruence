@@ -314,14 +314,19 @@ class ConversationDatabase:
 
 
 # ---------------------------------------------------------------------------
-# Singleton instance
+# Thread-safe singleton instance
 # ---------------------------------------------------------------------------
+import threading
 _db_instance: Optional[ConversationDatabase] = None
+_db_lock = threading.Lock()
 
 
 def get_conversation_db() -> ConversationDatabase:
-    """Get or create conversation database singleton."""
+    """Get or create conversation database singleton (thread-safe)."""
     global _db_instance
     if _db_instance is None:
-        _db_instance = ConversationDatabase()
+        with _db_lock:
+            # Double-check locking pattern
+            if _db_instance is None:
+                _db_instance = ConversationDatabase()
     return _db_instance
