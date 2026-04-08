@@ -414,10 +414,34 @@ def save_therapist_notes(
 
 
 def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
-    """Convert reliable extraction output to readable markdown format."""
-    lines = ["# 📝 Session Data Summary", ""]
-    lines.append("*Reliable fact extraction and clinical templates - not a replacement for professional judgment*")
+    """Convert SOAP note output to readable markdown format."""
+    lines = ["# 📝 SOAP Clinical Note", ""]
+    lines.append("*Generated clinical documentation - requires clinician review and completion*")
     lines.append("")
+    
+    # Handle style-matched format
+    if notes.get("format") == "style_matched":
+        lines.append("## Style-Matched Clinical Note")
+        lines.append("")
+        lines.append(f"**Style Source:** {notes.get('style_info', {}).get('note_name', 'User uploaded note')}")
+        lines.append("")
+        lines.append("### Generated Note Content")
+        lines.append("```")
+        lines.append(notes.get("content", "No content available"))
+        lines.append("```")
+        lines.append("")
+        
+        # Session metadata for style-matched notes
+        session_meta = notes.get("session_metadata", {})
+        if session_meta:
+            lines.append("### Session Information")
+            if "duration" in session_meta:
+                lines.append(f"**Duration:** {session_meta['duration']}")
+            if "transcript_length" in session_meta:
+                lines.append(f"**Transcript Length:** {session_meta['transcript_length']} characters")
+            lines.append("")
+        
+        return "\n".join(lines)
     
     # Handle fallback format
     if notes.get("format") == "fallback":
@@ -426,109 +450,201 @@ def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
         lines.append(notes.get("raw_content", "No content available"))
         return "\n".join(lines)
     
+    # Handle new SOAP format
+    soap_note = notes.get("soap_note", {})
+    if soap_note:
+        lines.append("## SOAP Note")
+        lines.append("")
+        
+        # SUBJECTIVE
+        subjective = soap_note.get("subjective", {})
+        if subjective:
+            lines.append("### 🗣️ SUBJECTIVE")
+            lines.append("*Patient's personal experiences, feelings, and perspectives*")
+            lines.append("")
+            
+            if subjective.get("chief_complaint"):
+                lines.append("**Chief Complaint:**")
+                lines.append(f"{subjective['chief_complaint']}")
+                lines.append("")
+            
+            if subjective.get("history_present_illness"):
+                lines.append("**History of Present Illness:**")
+                lines.append(f"{subjective['history_present_illness']}")
+                lines.append("")
+            
+            if subjective.get("current_medications"):
+                lines.append("**Current Medications:**")
+                for med in subjective["current_medications"]:
+                    if isinstance(med, dict):
+                        med_str = med.get("medication", "Unknown medication")
+                        if med.get("dosage"):
+                            med_str += f" ({med['dosage']})"
+                        lines.append(f"- {med_str}")
+                        if med.get("patient_report"):
+                            lines.append(f"  - Patient reports: \"{med['patient_report']}\"")
+                    else:
+                        lines.append(f"- {med}")
+                lines.append("")
+            
+            if subjective.get("psychosocial_factors"):
+                lines.append("**Psychosocial Factors:**")
+                lines.append(f"{subjective['psychosocial_factors']}")
+                lines.append("")
+            
+            if subjective.get("patient_perspective"):
+                lines.append("**Patient's Perspective:**")
+                lines.append(f"{subjective['patient_perspective']}")
+                lines.append("")
+        
+        # OBJECTIVE
+        objective = soap_note.get("objective", {})
+        if objective:
+            lines.append("### 👁️ OBJECTIVE")
+            lines.append("*Observable clinical data and mental status examination*")
+            lines.append("")
+            
+            mse = objective.get("mental_status_exam", {})
+            if mse:
+                lines.append("**Mental Status Examination:**")
+                for key, value in mse.items():
+                    if value and value != "Not discussed in this session":
+                        formatted_key = key.replace("_", " ").title()
+                        lines.append(f"- **{formatted_key}:** {value}")
+                lines.append("")
+            
+            if objective.get("clinical_observations"):
+                lines.append("**Clinical Observations:**")
+                lines.append(f"{objective['clinical_observations']}")
+                lines.append("")
+        
+        # ASSESSMENT
+        assessment = soap_note.get("assessment", {})
+        if assessment:
+            lines.append("### 🔍 ASSESSMENT")
+            lines.append("*Clinical analysis and diagnostic impressions*")
+            lines.append("")
+            
+            if assessment.get("clinical_impressions"):
+                lines.append("**Clinical Impressions:**")
+                lines.append(f"{assessment['clinical_impressions']}")
+                lines.append("")
+            
+            if assessment.get("problem_list"):
+                lines.append("**Problem List:**")
+                for problem in assessment["problem_list"]:
+                    if isinstance(problem, dict):
+                        problem_str = problem.get("problem", "Unknown problem")
+                        if problem.get("priority"):
+                            problem_str += f" (Priority: {problem['priority']})"
+                        if problem.get("status"):
+                            problem_str += f" - Status: {problem['status']}"
+                        lines.append(f"- {problem_str}")
+                    else:
+                        lines.append(f"- {problem}")
+                lines.append("")
+            
+            if assessment.get("risk_assessment"):
+                lines.append("**Risk Assessment:**")
+                lines.append(f"{assessment['risk_assessment']}")
+                lines.append("")
+            
+            if assessment.get("progress_notes"):
+                lines.append("**Progress Notes:**")
+                lines.append(f"{assessment['progress_notes']}")
+                lines.append("")
+        
+        # PLAN
+        plan = soap_note.get("plan", {})
+        if plan:
+            lines.append("### 📋 PLAN")
+            lines.append("*Treatment interventions and next steps*")
+            lines.append("")
+            
+            if plan.get("therapeutic_interventions"):
+                lines.append("**Therapeutic Interventions:**")
+                for intervention in plan["therapeutic_interventions"]:
+                    lines.append(f"- {intervention}")
+                lines.append("")
+            
+            if plan.get("homework_assignments"):
+                lines.append("**Homework/Assignments:**")
+                for homework in plan["homework_assignments"]:
+                    lines.append(f"- {homework}")
+                lines.append("")
+            
+            if plan.get("medication_plan"):
+                lines.append("**Medication Plan:**")
+                lines.append(f"{plan['medication_plan']}")
+                lines.append("")
+            
+            follow_up = plan.get("follow_up", {})
+            if follow_up:
+                lines.append("**Follow-up:**")
+                if follow_up.get("next_appointment"):
+                    lines.append(f"- Next appointment: {follow_up['next_appointment']}")
+                if follow_up.get("frequency"):
+                    lines.append(f"- Session frequency: {follow_up['frequency']}")
+                if follow_up.get("monitoring"):
+                    lines.append(f"- Monitoring: {follow_up['monitoring']}")
+                lines.append("")
+            
+            if plan.get("referrals"):
+                lines.append("**Referrals:**")
+                for referral in plan["referrals"]:
+                    lines.append(f"- {referral}")
+                lines.append("")
+            
+            if plan.get("patient_education"):
+                lines.append("**Patient Education:**")
+                lines.append(f"{plan['patient_education']}")
+                lines.append("")
+    
     # Session metadata
     metadata = notes.get("session_metadata", {})
     if metadata:
         lines.append("## Session Information")
-        if "duration_seconds" in metadata:
+        if "duration_seconds" in metadata and metadata["duration_seconds"] > 0:
             duration = metadata["duration_seconds"]
             lines.append(f"**Duration:** {duration} seconds (~{duration/60:.1f} minutes)")
+        if "session_type" in metadata:
+            lines.append(f"**Session Type:** {metadata['session_type']}")
+        if "primary_focus" in metadata:
+            lines.append(f"**Primary Focus:** {metadata['primary_focus']}")
         if "extraction_confidence" in metadata:
             lines.append(f"**Extraction Confidence:** {metadata['extraction_confidence']}")
         lines.append("")
     
-    # Discussion Summary
-    summary = notes.get("discussion_summary", {})
-    if summary:
-        lines.append("## Discussion Summary")
+    # Clinical summary
+    clinical_summary = notes.get("clinical_summary", {})
+    if clinical_summary:
+        lines.append("## Clinical Summary")
         lines.append("")
         
-        if "main_topics" in summary and summary["main_topics"]:
-            lines.append("**Main Topics Discussed:**")
-            for topic in summary["main_topics"]:
-                lines.append(f"- {topic}")
+        if clinical_summary.get("key_themes"):
+            lines.append("**Key Therapeutic Themes:**")
+            for theme in clinical_summary["key_themes"]:
+                lines.append(f"- {theme}")
             lines.append("")
         
-        if "patient_concerns" in summary and summary["patient_concerns"]:
-            lines.append("**Patient Concerns:**")
-            for concern in summary["patient_concerns"]:
-                lines.append(f"- {concern}")
+        if clinical_summary.get("patient_goals"):
+            lines.append("**Patient Goals:**")
+            for goal in clinical_summary["patient_goals"]:
+                lines.append(f"- {goal}")
             lines.append("")
         
-        if "session_structure" in summary:
-            lines.append(f"**Session Flow:** {summary['session_structure']}")
-            lines.append("")
-    
-    # Extracted Facts
-    facts = notes.get("extracted_facts", {})
-    if facts:
-        lines.append("## Extracted Facts")
-        lines.append("")
-        
-        # Medications
-        if "medications" in facts and facts["medications"]:
-            lines.append("### Medications Mentioned")
-            for med in facts["medications"]:
-                dosage_str = f" ({med['dosage']})" if med.get("dosage") else ""
-                lines.append(f"- **{med['name']}**{dosage_str}")
-                lines.append(f"  - Context: \"{med['context']}\" [{med['timestamp']}]")
+        if clinical_summary.get("clinician_observations"):
+            lines.append("**Clinician Observations:**")
+            for obs in clinical_summary["clinician_observations"]:
+                lines.append(f"- {obs}")
             lines.append("")
         
-        # Symptoms
-        if "symptoms" in facts and facts["symptoms"]:
-            lines.append("### Symptoms Reported")
-            for symptom in facts["symptoms"]:
-                lines.append(f"- **\"{symptom['symptom']}\"** [{symptom['timestamp']}]")
-                if symptom.get("context"):
-                    lines.append(f"  - Full context: {symptom['context']}")
-            lines.append("")
-        
-        # Timeline Events
-        if "timeline_events" in facts and facts["timeline_events"]:
-            lines.append("### Timeline of Events")
-            for event in facts["timeline_events"]:
-                lines.append(f"- **{event['timeframe']}**: {event['event']}")
-                lines.append(f"  - Quote: \"{event['quote']}\" [{event['timestamp']}]")
-            lines.append("")
-        
-        # Life Events
-        if "life_events" in facts and facts["life_events"]:
-            lines.append("### Life Events Mentioned")
-            for event in facts["life_events"]:
-                lines.append(f"- **{event['event']}**")
-                lines.append(f"  - Quote: \"{event['quote']}\" [{event['timestamp']}]")
-            lines.append("")
-    
-    # Clinical Templates
-    templates = notes.get("clinical_templates", {})
-    if templates:
-        lines.append("## Clinical Templates")
-        lines.append("")
-        lines.append("*Ready-to-use templates for clinical documentation:*")
-        lines.append("")
-        
-        if "soap_subjective" in templates:
-            lines.append("### SOAP Note - Subjective Section")
-            lines.append("```")
-            lines.append(templates["soap_subjective"].replace("\\n", "\n"))
-            lines.append("```")
-            lines.append("")
-        
-        if "hpi_template" in templates:
-            lines.append("### History of Present Illness Template")
-            lines.append("```")
-            lines.append(templates["hpi_template"].replace("\\n", "\n"))
-            lines.append("```")
-            lines.append("")
-        
-        if "fact_sheet" in templates:
-            lines.append("### Quick Reference Fact Sheet")
-            lines.append("```")
-            lines.append(templates["fact_sheet"].replace("\\n", "\n"))
-            lines.append("```")
+        if clinical_summary.get("session_outcome"):
+            lines.append("**Session Outcome:**")
+            lines.append(f"{clinical_summary['session_outcome']}")
             lines.append("")
     
     lines.append("---")
-    lines.append("*This summary focuses on reliable fact extraction. Clinical interpretation and assessment should be completed by qualified clinicians.*")
+    lines.append("*This SOAP note requires clinician review and completion. All clinical assessments and treatment plans should be verified by qualified healthcare professionals.*")
     
     return "\n".join(lines)
