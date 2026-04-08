@@ -795,3 +795,258 @@ def search_patients(query: str) -> List[Dict[str, Any]]:
             })
     
     return matches
+
+
+# ---------------------------------------------------------------------------
+# Note Style Management Functions (MVP)
+# ---------------------------------------------------------------------------
+
+def save_note_style(
+    user_id: str,
+    note_name: str,
+    note_text: str,
+    file_type: str,
+    validation_info: Optional[Dict[str, Any]] = None,
+    style_analysis: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """
+    Save note style to database.
+    
+    Args:
+        user_id: User identifier
+        note_name: Name for the note style
+        note_text: Extracted note text
+        file_type: File type (pdf, docx, txt)
+        validation_info: Validation results
+        style_analysis: Style analysis results
+    
+    Returns:
+        Note style ID if successful, None otherwise
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.error("Database not enabled - cannot save note style")
+        return None
+    
+    try:
+        # For MVP: deactivate existing note styles for this user (one style per user)
+        db.client.table("user_note_styles")\
+            .update({"is_active": False})\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        # Insert new note style
+        insert_data = {
+            "user_id": user_id,
+            "note_name": note_name,
+            "note_text": note_text,
+            "file_type": file_type,
+            "is_active": True
+        }
+        
+        if validation_info:
+            insert_data["validation_info"] = validation_info
+        
+        if style_analysis:
+            insert_data["style_analysis"] = style_analysis
+        
+        result = db.client.table("user_note_styles").insert(insert_data).execute()
+        
+        if result.data:
+            note_id = result.data[0]["id"]
+            logger.info(f"✅ Note style saved for user {user_id[:8]}... (ID: {note_id})")
+            return note_id
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to save note style for user {user_id[:8]}...: {e}")
+        return None
+
+def get_active_note_style(user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get active note style for user.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        Note style data if found, None otherwise
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.warning("Database not enabled - cannot get note style")
+        return None
+    
+    try:
+        result = db.client.table("user_note_styles")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .eq("is_active", True)\
+            .single()\
+            .execute()
+        
+        if result.data:
+            logger.debug(f"Found active note style for user {user_id[:8]}...")
+            return result.data
+        
+        return None
+        
+    except Exception as e:
+        logger.debug(f"No active note style found for user {user_id[:8]}...: {e}")
+        return None
+
+def list_note_styles(user_id: str) -> List[Dict[str, Any]]:
+    """
+    List all note styles for user.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        List of note style records
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.warning("Database not enabled - cannot list note styles")
+        return []
+    
+    try:
+        result = db.client.table("user_note_styles")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .order("created_at", desc=True)\
+            .execute()
+        
+        note_styles = result.data or []
+        logger.info(f"Found {len(note_styles)} note styles for user {user_id[:8]}...")
+        return note_styles
+        
+    except Exception as e:
+        logger.error(f"Failed to list note styles for user {user_id[:8]}...: {e}")
+        return []
+
+def get_note_style_by_id(user_id: str, note_style_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get specific note style by ID.
+    
+    Args:
+        user_id: User identifier (for security)
+        note_style_id: Note style ID
+    
+    Returns:
+        Note style data if found and owned by user, None otherwise
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.warning("Database not enabled - cannot get note style")
+        return None
+    
+    try:
+        result = db.client.table("user_note_styles")\
+            .select("*")\
+            .eq("id", note_style_id)\
+            .eq("user_id", user_id)\
+            .single()\
+            .execute()
+        
+        return result.data if result.data else None
+        
+    except Exception as e:
+        logger.error(f"Failed to get note style {note_style_id} for user {user_id[:8]}...: {e}")
+        return None
+
+def set_active_note_style(user_id: str, note_style_id: str) -> bool:
+    """
+    Set a specific note style as active for user.
+    
+    Args:
+        user_id: User identifier
+        note_style_id: Note style ID to activate
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.error("Database not enabled - cannot set active note style")
+        return False
+    
+    try:
+        # First verify the note style exists and belongs to user
+        note_style = get_note_style_by_id(user_id, note_style_id)
+        if not note_style:
+            logger.warning(f"Note style {note_style_id} not found for user {user_id[:8]}...")
+            return False
+        
+        # Deactivate all note styles for user
+        db.client.table("user_note_styles")\
+            .update({"is_active": False})\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        # Activate the specified note style
+        result = db.client.table("user_note_styles")\
+            .update({"is_active": True})\
+            .eq("id", note_style_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if result.data:
+            logger.info(f"✅ Set note style {note_style_id} as active for user {user_id[:8]}...")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Failed to set active note style for user {user_id[:8]}...: {e}")
+        return False
+
+def delete_note_style(user_id: str, note_style_id: str) -> bool:
+    """
+    Delete a note style.
+    
+    Args:
+        user_id: User identifier (for security)
+        note_style_id: Note style ID to delete
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    from app.services.database import get_conversation_db
+    
+    db = get_conversation_db()
+    if not db.is_enabled():
+        logger.error("Database not enabled - cannot delete note style")
+        return False
+    
+    try:
+        # Verify ownership before deletion
+        note_style = get_note_style_by_id(user_id, note_style_id)
+        if not note_style:
+            logger.warning(f"Note style {note_style_id} not found for user {user_id[:8]}...")
+            return False
+        
+        # Delete the note style
+        result = db.client.table("user_note_styles")\
+            .delete()\
+            .eq("id", note_style_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        logger.info(f"✅ Deleted note style {note_style_id} for user {user_id[:8]}...")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to delete note style {note_style_id} for user {user_id[:8]}...: {e}")
+        return False

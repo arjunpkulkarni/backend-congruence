@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field, HttpUrl, model_validator
+from datetime import datetime
 
 
 class ProcessSessionRequest(BaseModel):
@@ -84,3 +85,60 @@ class SessionListItem(BaseModel):
     has_transcript: bool = False
     duration: Optional[float] = None
     overall_congruence: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Note Style Management API schemas (MVP)
+# ---------------------------------------------------------------------------
+
+class UploadNoteStyleRequest(BaseModel):
+    user_id: str = Field(..., description="User identifier")
+    note_name: str = Field(..., description="Name for this note style", max_length=100)
+    file_content: str = Field(..., description="Base64 encoded file content")
+    file_type: str = Field(..., description="File type: pdf, docx, txt")
+    
+    @model_validator(mode='after')
+    def validate_file_type(self):
+        allowed_types = ['pdf', 'docx', 'txt']
+        if self.file_type.lower() not in allowed_types:
+            raise ValueError(f'File type must be one of: {", ".join(allowed_types)}')
+        return self
+
+class NoteStyleResponse(BaseModel):
+    id: str
+    user_id: str
+    note_name: str
+    preview_text: str
+    file_type: str
+    created_at: str
+    is_active: bool
+    validation_info: Optional[Dict[str, Any]] = None
+    style_analysis: Optional[Dict[str, Any]] = None
+
+class ListNoteStylesResponse(BaseModel):
+    note_styles: List[NoteStyleResponse]
+    total_count: int
+
+class GenerateNotesWithStyleRequest(BaseModel):
+    transcript_text: str = Field(..., description="Session transcript text")
+    transcript_segments: Optional[List[Dict[str, Any]]] = Field(None, description="Transcript segments with timestamps")
+    session_summary: Optional[Dict[str, Any]] = Field(None, description="Session summary data")
+    patient_id: Optional[str] = Field(None, description="Patient identifier")
+    user_id: Optional[str] = Field(None, description="User ID for note style lookup")
+    use_note_style: bool = Field(False, description="Whether to use uploaded note style")
+
+class GenerateNotesWithStyleResponse(BaseModel):
+    format: str  # "style_matched" or "standard"
+    content: str
+    style_source: Optional[str] = None  # "user_uploaded" or None
+    patient_id: Optional[str] = None
+    generated_at: str
+    style_info: Optional[Dict[str, Any]] = None
+
+class DeleteNoteStyleRequest(BaseModel):
+    user_id: str = Field(..., description="User identifier")
+    note_style_id: str = Field(..., description="Note style ID to delete")
+
+class SetActiveNoteStyleRequest(BaseModel):
+    user_id: str = Field(..., description="User identifier")
+    note_style_id: str = Field(..., description="Note style ID to set as active")

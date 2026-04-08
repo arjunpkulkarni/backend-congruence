@@ -15,6 +15,14 @@ from app.models.schemas import (
     ProcessSessionResponse,
     AgentChatRequest,
     AgentChatResponse,
+    # Note Style Management schemas
+    UploadNoteStyleRequest,
+    NoteStyleResponse,
+    ListNoteStylesResponse,
+    GenerateNotesWithStyleRequest,
+    GenerateNotesWithStyleResponse,
+    DeleteNoteStyleRequest,
+    SetActiveNoteStyleRequest,
 )
 from app.models.conversation import (
     ConversationCreate,
@@ -48,7 +56,7 @@ from app.services.simplified_notes import (
     generate_simplified_notes,
     save_simplified_outputs,
 )
-from app.services.notes import generate_therapist_notes, save_therapist_notes
+from app.services.notes import generate_therapist_notes, generate_therapist_notes_with_style, save_therapist_notes
 from app.services.fact_extraction import extract_facts_from_therapist_notes, extract_facts_from_analysis
 from app.services.clinical_state import update_patient_clinical_state
 from app.services.agent import get_agent
@@ -858,3 +866,180 @@ def api_get_patient_history(
 def api_get_practice_analytics() -> Dict[str, Any]:
     """Get practice-wide analytics: total patients, sessions, average congruence."""
     return da_get_practice_analytics()
+
+
+# ---------------------------------------------------------------------------
+# Note Style Management API Endpoints (MVP)
+# ---------------------------------------------------------------------------
+
+@app.post("/note-styles/upload")
+def api_upload_note_style(request: UploadNoteStyleRequest) -> NoteStyleResponse:
+    """
+    Upload and process a clinical note for style matching.
+    
+    Extracts text from PDF/DOCX/TXT files and analyzes the writing style
+    for future note generation matching.
+    """
+    from app.services.note_style import (
+        extract_text_from_file, 
+        get_preview_text, 
+        validate_note_content, 
+        analyze_note_style
+    )
+    from app.services.data_access import save_note_style
+    from datetime import datetime
+    
+    try:
+        # Extract text from uploaded file
+        note_text = extract_text_from_file(request.file_content, request.file_type)
+        
+        # Validate the extracted content
+        validation_info = validate_note_content(note_text)
+        if not validation_info["is_valid"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid note content: {'; '.join(validation_info['errors'])}"
+            )
+        
+        # Analyze the note style
+        style_analysis = analyze_note_style(note_text)
+        
+        # Save to database
+        note_id = save_note_style(
+            user_id=request.user_id,
+            note_name=request.note_name,
+            note_text=note_text,
+            file_type=request.file_type,
+            validation_info=validation_info,
+            style_analysis=style_analysis
+        )
+        
+        if not note_id:
+            raise HTTPException(status_code=500, detail="Failed to save note style")
+        
+        # Generate preview
+        preview_text = get_preview_text(note_text)
+        
+        return NoteStyleResponse(
+            id=note_id,
+            user_id=request.user_id,
+            note_name=request.note_name,
+            preview_text=preview_text,
+            file_type=request.file_type,
+            created_at=datetime.now().isoformat(),
+            is_active=True,  # MVP: one style per user, so new uploads are always active
+            validation_info=validation_info,
+            style_analysis=style_analysis
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Note style upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during note processing")
+
+@app.get("/note-styles/{user_id}")
+def api_list_note_styles(user_id: str) -> ListNoteStylesResponse:
+    """List all note styles for a user."""
+    from app.services.data_access import list_note_styles
+    from app.services.note_style import get_preview_text
+    
+    note_styles_data = list_note_styles(user_id)
+    
+    note_styles = []
+    for style_data in note_styles_data:
+        preview_text = get_preview_text(style_data.get("note_text", ""))
+        
+        note_styles.append(NoteStyleResponse(
+            id=style_data["id"],
+            user_id=style_data["user_id"],
+            note_name=style_data["note_name"],
+            preview_text=preview_text,
+            file_type=style_data["file_type"],
+            created_at=style_data["created_at"],
+            is_active=style_data.get("is_active", False),
+            validation_info=style_data.get("validation_info"),
+            style_analysis=style_data.get("style_analysis")
+        ))
+    
+    return ListNoteStylesResponse(
+        note_styles=note_styles,
+        total_count=len(note_styles)
+    )
+
+@app.post("/note-styles/set-active")
+def api_set_active_note_style(request: SetActiveNoteStyleRequest) -> Dict[str, str]:
+    """Set a specific note style as active for the user."""
+    from app.services.data_access import set_active_note_style
+    
+    success = set_active_note_style(request.user_id, request.note_style_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Note style not found or access denied")
+    
+    return {"message": "Note style activated successfully", "note_style_id": request.note_style_id}
+
+@app.delete("/note-styles/{user_id}/{note_style_id}")
+def api_delete_note_style(user_id: str, note_style_id: str) -> Dict[str, str]:
+    """Delete a note style."""
+    from app.services.data_access import delete_note_style
+    
+    success = delete_note_style(user_id, note_style_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Note style not found or access denied")
+    
+    return {"message": "Note style deleted successfully", "note_style_id": note_style_id}
+
+@app.post("/notes/generate-with-style")
+def api_generate_notes_with_style(request: GenerateNotesWithStyleRequest) -> GenerateNotesWithStyleResponse:
+    """
+    Generate clinical notes with optional style matching.
+    
+    If use_note_style=True and user has an active note style, 
+    the generated notes will match that style. Otherwise, 
+    falls back to standard note generation.
+    """
+    from datetime import datetime
+    
+    try:
+        # Generate notes with style matching
+        notes_result = generate_therapist_notes_with_style(
+            transcript_text=request.transcript_text,
+            transcript_segments=request.transcript_segments,
+            session_summary=request.session_summary,
+            patient_id=request.patient_id,
+            user_id=request.user_id,
+            use_note_style=request.use_note_style
+        )
+        
+        if not notes_result:
+            raise HTTPException(status_code=500, detail="Failed to generate notes")
+        
+        # Handle both style-matched and standard note formats
+        if notes_result.get("format") == "style_matched":
+            return GenerateNotesWithStyleResponse(
+                format="style_matched",
+                content=notes_result["content"],
+                style_source=notes_result.get("style_source"),
+                patient_id=request.patient_id,
+                generated_at=notes_result.get("generated_at", datetime.now().isoformat()),
+                style_info=notes_result.get("style_info")
+            )
+        else:
+            # Standard format - convert to markdown
+            from app.services.notes import _convert_notes_to_markdown
+            markdown_content = _convert_notes_to_markdown(notes_result)
+            
+            return GenerateNotesWithStyleResponse(
+                format="standard",
+                content=markdown_content,
+                style_source=None,
+                patient_id=request.patient_id,
+                generated_at=datetime.now().isoformat(),
+                style_info=None
+            )
+        
+    except Exception as e:
+        logger.error(f"Notes generation with style failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during note generation")

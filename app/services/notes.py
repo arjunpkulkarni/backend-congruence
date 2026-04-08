@@ -51,6 +51,60 @@ def generate_therapist_notes(
         patient_id=patient_id,
     )
 
+def generate_therapist_notes_with_style(
+    transcript_text: str,
+    transcript_segments: Optional[List[Dict[str, Any]]] = None,
+    session_summary: Optional[Dict[str, Any]] = None,
+    patient_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    use_note_style: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate therapist notes with optional style matching.
+    
+    Args:
+        transcript_text: Session transcript
+        transcript_segments: Transcript segments with timestamps
+        session_summary: Session analysis summary
+        patient_id: Patient identifier
+        user_id: User ID for note style lookup
+        use_note_style: Whether to use uploaded note style
+    
+    Returns:
+        Generated notes with style matching if requested
+    """
+    
+    if use_note_style and user_id:
+        # Get user's active note style
+        from app.services.data_access import get_active_note_style
+        note_style = get_active_note_style(user_id)
+        
+        if note_style:
+            logger.info(f"Using note style '{note_style['note_name']}' for user {user_id[:8]}...")
+            return _generate_notes_with_style_matching(
+                transcript_text=transcript_text,
+                transcript_segments=transcript_segments,
+                session_summary=session_summary,
+                patient_id=patient_id,
+                reference_note=note_style["note_text"],
+                style_info={
+                    "note_style_id": note_style["id"],
+                    "note_name": note_style["note_name"],
+                    "file_type": note_style["file_type"],
+                    "style_analysis": note_style.get("style_analysis")
+                }
+            )
+        else:
+            logger.warning(f"No active note style found for user {user_id[:8]}..., falling back to standard generation")
+    
+    # Fall back to regular note generation
+    return _generate_notes_single_call(
+        transcript_text=transcript_text,
+        transcript_segments=transcript_segments,
+        session_summary=session_summary,
+        patient_id=patient_id,
+    )
+
 
 def _generate_notes_single_call(
     transcript_text: str,
@@ -136,6 +190,118 @@ def _generate_notes_single_call(
     
     logger.info("Single-call reliable extraction completed successfully")
     return extraction_output
+
+def _generate_notes_with_style_matching(
+    transcript_text: str,
+    transcript_segments: Optional[List[Dict[str, Any]]] = None,
+    session_summary: Optional[Dict[str, Any]] = None,
+    patient_id: Optional[str] = None,
+    reference_note: str = None,
+    style_info: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate notes matching the style of a reference note.
+    
+    This is the core MVP functionality - LLM mimics structure, tone, and format
+    of the user's uploaded note while staying factual to the transcript.
+    """
+    
+    logger.info("Generating notes with style matching for patient_id=%s", patient_id)
+
+    notes_client, notes_model = _get_notes_client()
+    if notes_client is None or notes_model is None:
+        logger.warning("Notes OpenAI client not available")
+        return None
+    
+    if not transcript_text or not transcript_text.strip():
+        logger.warning("Empty transcript provided")
+        return None
+
+    if not reference_note or not reference_note.strip():
+        logger.warning("Empty reference note provided, falling back to standard generation")
+        return _generate_notes_single_call(transcript_text, transcript_segments, session_summary, patient_id)
+
+    # Prepare reference note for prompt (limit size)
+    from app.services.note_style import prepare_style_context
+    reference_context = prepare_style_context(reference_note, max_chars=2000)
+    
+    # Build session context
+    duration_str = "unknown"
+    if session_summary and "duration" in session_summary:
+        duration_seconds = session_summary.get("duration", 0)
+        duration_str = f"{duration_seconds:.0f} seconds (~{duration_seconds/60:.1f} minutes)"
+    
+    # Build the style-matching prompt
+    style_matching_prompt = f"""You are formatting a clinical note to match a specific clinician's documentation style.
+
+Here is a reference note written by the clinician:
+
+---REFERENCE NOTE---
+{reference_context}
+---END REFERENCE---
+
+Your task: Generate a clinical note that matches the EXACT style of the reference note.
+
+Match these elements:
+- Structure (section headers, ordering)
+- Tone (concise vs detailed, formal vs conversational)  
+- Level of detail (brief vs comprehensive)
+- Phrasing patterns and terminology
+- Section presence (if reference has "Family History", include it)
+
+CRITICAL RULES:
+- Do NOT invent clinical information
+- Only use information from the provided transcript
+- If a section from the reference note has no corresponding transcript information, write "Not discussed" or leave blank
+- Match the style and format, not the content
+- Stay factual - no clinical interpretations or assessments beyond what's explicitly stated
+
+Session Information:
+- Duration: {duration_str}
+- Patient ID: {patient_id or 'Unknown'}
+
+Here is the transcript to document:
+
+---TRANSCRIPT---
+{transcript_text}
+---END TRANSCRIPT---
+
+Generate a note in the same format and style as the reference note. Focus on matching structure, tone, and level of detail while staying completely factual to the transcript content."""
+
+    try:
+        response = notes_client.chat.completions.create(
+            model=notes_model,
+            messages=[
+                {"role": "system", "content": "You are a clinical documentation assistant that matches writing styles perfectly while maintaining factual accuracy."},
+                {"role": "user", "content": style_matching_prompt}
+            ],
+            temperature=0.3,  # Some creativity for style matching, but not too much
+            max_tokens=2500
+        )
+        
+        note_content = response.choices[0].message.content
+        
+        # Return in a structured format compatible with existing system
+        from datetime import datetime
+        return {
+            "format": "style_matched",
+            "content": note_content,
+            "style_source": "user_uploaded",
+            "patient_id": patient_id,
+            "generated_at": datetime.now().isoformat(),
+            "style_info": style_info,
+            "session_metadata": {
+                "duration": duration_str,
+                "transcript_length": len(transcript_text),
+                "reference_note_length": len(reference_note)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Style-matched note generation failed: {e}")
+        # Fall back to standard generation on error
+        logger.info("Falling back to standard note generation due to style matching error")
+        return _generate_notes_single_call(transcript_text, transcript_segments, session_summary, patient_id)
 
 
 def _build_emotion_data_summary(llm_analysis: Optional[Dict[str, Any]], session_summary: Optional[Dict[str, Any]]) -> str:
