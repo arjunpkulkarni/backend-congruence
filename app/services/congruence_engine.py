@@ -1,11 +1,14 @@
 from typing import Any, Dict, List, Optional, Tuple
 import math
+import logging
 from .llm import (
     analyze_text_emotion_with_llm,
     generate_incongruence_reason,
     batch_analyze_text_emotions,
     batch_generate_incongruence_reasons,
 )
+
+logger = logging.getLogger(__name__)
 
 EMOTION_ORDER: List[str] = ["joy", "sadness", "anger", "fear", "disgust", "surprise", "neutral"]
 EMOTION_KEYS: List[str] = EMOTION_ORDER[:]
@@ -336,6 +339,7 @@ def build_session_summary(
     patient_id: str,
     session_id: int,
     transcript_segments: Optional[List[Dict[str, Any]]] = None,
+    actual_duration_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Compute MSW-TECS overall_congruence, list of incongruent intervals, and aggregate emotion distributions.
@@ -352,6 +356,15 @@ def build_session_summary(
         }
 
     dt = 1.0 / 10.0
+
+    # Use actual recording duration if provided, otherwise fall back to timeline calculation
+    if actual_duration_seconds is not None:
+        duration = float(actual_duration_seconds)
+        logger.info("Using actual recording duration: %.2f seconds (%.1f minutes)", duration, duration/60)
+    else:
+        duration = len(congruence_timeline) * dt
+        logger.warning("No actual duration provided, using timeline calculation: %.2f seconds (%.1f minutes)", duration, duration/60)
+        logger.warning("This may be inaccurate if timeline is truncated or has gaps")
 
     # 1) MSW-TECS
     num = 0.0
@@ -485,7 +498,6 @@ def build_session_summary(
     audio_dist = _normalize_distribution(audio_acc)
     text_dist = _normalize_distribution(text_acc)
 
-    duration = len(congruence_timeline) * dt
     # Legacy duration-based congruence for back-compat
     total_incong = 0.0
     for m in moments:

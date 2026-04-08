@@ -31,6 +31,8 @@ class ProcessSessionResponse(BaseModel):
     notes: Optional[Dict[str, Any]] = None  # Structured therapist notes (JSON format)
     transcript_text: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
+    # Processing status and reliability tracking
+    processing_status: Optional[Dict[str, Any]] = None
     # Incongruence reasons are included in session_summary.incongruent_moments[].reason
 
 
