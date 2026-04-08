@@ -5,14 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from app.services.llm import analyze_text_emotion_with_llm
 from app.services.prompts import (
-    PROMPT_1_EXTRACTION,
-    PROMPT_2_EMOTION,
-    PROMPT_3_CLINICAL,
-    PROMPT_4_RECOMMENDATIONS,
-    build_user_message_step1,
-    build_user_message_step2,
-    build_user_message_step3,
-    build_user_message_step4,
+    PROMPT_SINGLE_RELIABLE_EXTRACTION,
+    build_single_extraction_message,
 )
 
 logger = logging.getLogger("emotion_api.notes")
@@ -50,7 +44,7 @@ def generate_therapist_notes(
     patient_id: Optional[str] = None,
     use_sequential: bool = True,
 ) -> Optional[Dict[str, Any]]:    
-    return _generate_notes_sequential(
+    return _generate_notes_single_call(
         transcript_text=transcript_text,
         transcript_segments=transcript_segments,
         session_summary=session_summary,
@@ -58,22 +52,21 @@ def generate_therapist_notes(
     )
 
 
-def _generate_notes_sequential(
+def _generate_notes_single_call(
     transcript_text: str,
     transcript_segments: Optional[List[Dict[str, Any]]] = None,
     session_summary: Optional[Dict[str, Any]] = None,
     patient_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Sequential 4-prompt pipeline for therapist notes generation.
+    Single-call reliable extraction for therapist session data.
     
-    Pipeline:
-    1. Extract objective facts (timestamps, quotes, topics)
-    2. Analyze emotions (patterns, incongruence)
-    3. Synthesize clinical observations (behaviors, risks)
-    4. Generate recommendations (summary, next steps)
+    Focuses on what LLMs can reliably extract:
+    - Factual content (medications, symptoms, timeline)
+    - Speaker separation
+    - Clinical template formatting
     """
-    logger.info("Starting sequential 4-prompt pipeline for patient_id=%s", patient_id)
+    logger.info("Starting single-call reliable extraction for patient_id=%s", patient_id)
 
     notes_client, notes_model = _get_notes_client()
 
@@ -85,8 +78,9 @@ def _generate_notes_sequential(
         logger.warning("Empty transcript provided")
         return None
 
-    logger.info("Pre-processing: Analyzing transcript with LLM for emotional content...")
-
+    # Optional: Get emotion data for context (but don't rely on it)
+    logger.info("Pre-processing: Analyzing transcript with LLM for emotional context...")
+    
     llm_analysis = analyze_text_emotion_with_llm(
         text=transcript_text,
         model=None,
@@ -94,17 +88,9 @@ def _generate_notes_sequential(
         temperature=0.2,
     )
 
-    if llm_analysis:
-        logger.info("LLM transcript analysis completed")
-        logger.info("  - Emotions: %s", llm_analysis.get("emotion_distribution", {}))
-        logger.info("  - Valence: %.3f, Arousal: %.3f", 
-                   llm_analysis.get("valence", 0.0),
-                   llm_analysis.get("arousal", 0.0))
-    else:
-        logger.warning("LLM transcript analysis failed")
-
     emotion_data_summary = _build_emotion_data_summary(llm_analysis, session_summary)
     
+    # Build session metadata
     duration_str = "unknown"
     if session_summary and "duration" in session_summary:
         duration_seconds = session_summary.get("duration", 0)
@@ -112,113 +98,44 @@ def _generate_notes_sequential(
     
     has_timestamps = bool(transcript_segments)
         
-    logger.info("Pipeline Step 1/4: Extracting factual data...")
+    logger.info("Performing single reliable extraction call...")
     
-    step1_user_msg = build_user_message_step1(
+    # Build user message for single extraction
+    user_message = build_single_extraction_message(
         transcript_text=transcript_text,
         duration_str=duration_str,
         has_timestamps=has_timestamps,
         emotion_data_summary=emotion_data_summary,
     )
     
-    step1_output = _call_llm_step(
+    # Single LLM call for all reliable extraction
+    extraction_output = _call_llm_step(
         notes_client,
         notes_model,
-        system_prompt=PROMPT_1_EXTRACTION,
-        user_message=step1_user_msg,
-        step_name="Step 1: Data Extraction",
+        system_prompt=PROMPT_SINGLE_RELIABLE_EXTRACTION,
+        user_message=user_message,
+        step_name="Reliable Extraction",
         temperature=0.2,
     )
     
-    if not step1_output:
-        logger.error("Step 1 (Data Extraction) failed")
+    if not extraction_output:
+        logger.error("Reliable extraction failed")
         return None
     
-    logger.info("Step 1 complete: %d topics, %d emotional datapoints",
-                len(step1_output.get("key_topics", [])),
-                len(step1_output.get("emotional_datapoints", [])))
-        
-    logger.info("Pipeline Step 2/4: Analyzing emotional patterns...")
+    # Log what was extracted
+    facts = extraction_output.get("extracted_facts", {})
+    logger.info("Extraction complete:")
+    logger.info("  - Medications: %d", len(facts.get("medications", [])))
+    logger.info("  - Symptoms: %d", len(facts.get("symptoms", [])))
+    logger.info("  - Timeline events: %d", len(facts.get("timeline_events", [])))
+    logger.info("  - Life events: %d", len(facts.get("life_events", [])))
     
-    step2_user_msg = build_user_message_step2(
-        step1_output=step1_output,
-        emotion_data_summary=emotion_data_summary,
-    )
+    summary = extraction_output.get("discussion_summary", {})
+    logger.info("  - Main topics: %d", len(summary.get("main_topics", [])))
+    logger.info("  - Patient concerns: %d", len(summary.get("patient_concerns", [])))
     
-    step2_output = _call_llm_step(
-        notes_client,
-        notes_model,
-        system_prompt=PROMPT_2_EMOTION,
-        user_message=step2_user_msg,
-        step_name="Step 2: Emotional Analysis",
-        temperature=0.3,
-    )
-    
-    if not step2_output:
-        logger.error("Step 2 (Emotional Analysis) failed")
-        return None
-    
-    logger.info("Step 2 complete: %d predominant emotions, %d incongruence moments",
-                len(step2_output.get("predominant_emotions", [])),
-                len(step2_output.get("incongruence_analysis", [])))
-    
-
-    logger.info("Pipeline Step 3/4: Generating clinical observations...")
-    
-    step3_user_msg = build_user_message_step3(
-        step1_output=step1_output,
-        step2_output=step2_output,
-    )
-    
-    step3_output = _call_llm_step(
-        notes_client,
-        notes_model,
-        system_prompt=PROMPT_3_CLINICAL,
-        user_message=step3_user_msg,
-        step_name="Step 3: Clinical Synthesis",
-        temperature=0.3,
-    )
-    
-    if not step3_output:
-        logger.error("Step 3 (Clinical Synthesis) failed")
-        return None
-    
-    risk = step3_output.get("risk_assessment", {})
-    risk_suicide = risk.get("suicide_self_harm", {}).get("indicators", "unknown")
-    logger.info("Step 3 complete: %d behavioral patterns, %d concerns, risk_suicide=%s",
-                len(step3_output.get("behavioral_patterns", [])),
-                len(step3_output.get("areas_of_concern", [])),
-                risk_suicide)
-       
-    logger.info("Pipeline Step 4/4: Compiling recommendations...")
-    
-    step4_user_msg = build_user_message_step4(
-        step1_output=step1_output,
-        step2_output=step2_output,
-        step3_output=step3_output,
-    )
-    
-    step4_output = _call_llm_step(
-        notes_client,
-        notes_model,
-        system_prompt=PROMPT_4_RECOMMENDATIONS,
-        user_message=step4_user_msg,
-        step_name="Step 4: Recommendations",
-        temperature=0.3,
-    )
-    
-    if not step4_output:
-        logger.error("Step 4 (Recommendations) failed")
-        return None
-    
-    logger.info("Step 4 complete: %d themes, %d follow-up actions",
-                len(step4_output.get("key_themes", [])),
-                len(step4_output.get("recommendations", {}).get("follow_up_actions", [])))
-    
-    final_notes = _merge_pipeline_outputs(step1_output, step2_output, step3_output, step4_output)
-    
-    logger.info("Sequential pipeline completed successfully")
-    return final_notes
+    logger.info("Single-call reliable extraction completed successfully")
+    return extraction_output
 
 
 def _build_emotion_data_summary(llm_analysis: Optional[Dict[str, Any]], session_summary: Optional[Dict[str, Any]]) -> str:
@@ -288,31 +205,7 @@ def _call_llm_step(
         return None
 
 
-def _merge_pipeline_outputs(
-    step1: Dict[str, Any],
-    step2: Dict[str, Any],
-    step3: Dict[str, Any],
-    step4: Dict[str, Any],
-) -> Dict[str, Any]:
-    final = {
-        "session_overview": step4.get("session_overview", {}),
-        "key_themes": step4.get("key_themes", []),
-        "emotional_analysis": {
-            "predominant_emotions": step2.get("predominant_emotions", []),
-            "emotional_shifts": step2.get("emotional_shifts", []),
-            "incongruence_moments": step2.get("incongruence_analysis", []),
-        },
-        "clinical_observations": {
-            "behavioral_patterns": step3.get("behavioral_patterns", []),
-            "areas_of_concern": step3.get("areas_of_concern", []),
-            "strengths_and_coping": step3.get("strengths_and_coping", []),
-        },
-        "risk_assessment": step3.get("risk_assessment", {}),
-        "recommendations": step4.get("recommendations", {}),
-        "interaction_dynamics": step4.get("interaction_dynamics", {}),
-    }
-    
-    return final
+# Old pipeline merge function removed - no longer needed with single-call approach
 
 
 def save_therapist_notes(
@@ -355,186 +248,121 @@ def save_therapist_notes(
 
 
 def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
-    """Convert structured notes dictionary to readable markdown format."""
-    lines = ["# Therapist Session Notes", ""]
+    """Convert reliable extraction output to readable markdown format."""
+    lines = ["# 📝 Session Data Summary", ""]
+    lines.append("*Reliable fact extraction and clinical templates - not a replacement for professional judgment*")
+    lines.append("")
     
+    # Handle fallback format
     if notes.get("format") == "fallback":
         lines.append("**Note:** This is a fallback format due to parsing issues.")
         lines.append("")
         lines.append(notes.get("raw_content", "No content available"))
         return "\n".join(lines)
     
-    if "session_overview" in notes:
-        overview = notes["session_overview"]
-        lines.append("## Session Overview")
-        lines.append("")
-        if "summary" in overview:
-            lines.append(overview["summary"])
-            lines.append("")
-        if "duration" in overview:
-            lines.append(f"**Duration:** {overview['duration']}")
-        if "engagement_level" in overview:
-            lines.append(f"**Engagement Level:** {overview['engagement_level']}")
-        if "overall_tone" in overview:
-            lines.append(f"**Overall Tone:** {overview['overall_tone']}")
+    # Session metadata
+    metadata = notes.get("session_metadata", {})
+    if metadata:
+        lines.append("## Session Information")
+        if "duration_seconds" in metadata:
+            duration = metadata["duration_seconds"]
+            lines.append(f"**Duration:** {duration} seconds (~{duration/60:.1f} minutes)")
+        if "extraction_confidence" in metadata:
+            lines.append(f"**Extraction Confidence:** {metadata['extraction_confidence']}")
         lines.append("")
     
-    if "key_themes" in notes and notes["key_themes"]:
-        lines.append("## Key Themes & Topics")
-        lines.append("")
-        for i, theme in enumerate(notes["key_themes"], 1):
-            lines.append(f"### {i}. {theme.get('theme', 'Unnamed Theme')}")
-            lines.append("")
-            if "description" in theme:
-                lines.append(theme["description"])
-                lines.append("")
-            if "evidence" in theme and theme["evidence"]:
-                lines.append("**Evidence:**")
-                for evidence in theme["evidence"]:
-                    lines.append(f"- {evidence}")
-                lines.append("")
-    
-    # Emotional Analysis
-    if "emotional_analysis" in notes:
-        ea = notes["emotional_analysis"]
-        lines.append("## Emotional Analysis")
+    # Discussion Summary
+    summary = notes.get("discussion_summary", {})
+    if summary:
+        lines.append("## Discussion Summary")
         lines.append("")
         
-        if "predominant_emotions" in ea and ea["predominant_emotions"]:
-            lines.append("### Predominant Emotions")
-            lines.append("")
-            for emotion in ea["predominant_emotions"]:
-                lines.append(f"**{emotion.get('emotion', 'Unknown')}** ({emotion.get('source', 'unknown')} - {emotion.get('intensity', 'unknown')} intensity)")
-                if "context" in emotion:
-                    lines.append(f"- {emotion['context']}")
-                lines.append("")
-        
-        if "emotional_shifts" in ea and ea["emotional_shifts"]:
-            lines.append("### Emotional Shifts")
-            lines.append("")
-            for shift in ea["emotional_shifts"]:
-                lines.append(f"**[{shift.get('timestamp', 'Unknown time')}]** {shift.get('from_emotion', '?')} → {shift.get('to_emotion', '?')}")
-                if "trigger" in shift:
-                    lines.append(f"- Trigger: {shift['trigger']}")
-                lines.append("")
-        
-        if "incongruence_moments" in ea and ea["incongruence_moments"]:
-            lines.append("### Incongruence Moments")
-            lines.append("")
-            for moment in ea["incongruence_moments"]:
-                lines.append(f"**[{moment.get('timestamp', 'Unknown time')}]**")
-                if "verbal" in moment:
-                    lines.append(f"- Verbal: {moment['verbal']}")
-                if "nonverbal" in moment:
-                    lines.append(f"- Non-verbal: {moment['nonverbal']}")
-                if "significance" in moment:
-                    lines.append(f"- Significance: {moment['significance']}")
-                lines.append("")
-    
-    # Clinical Observations
-    if "clinical_observations" in notes:
-        co = notes["clinical_observations"]
-        lines.append("## Clinical Observations")
-        lines.append("")
-        
-        if "behavioral_patterns" in co and co["behavioral_patterns"]:
-            lines.append("### Behavioral Patterns")
-            for pattern in co["behavioral_patterns"]:
-                lines.append(f"- {pattern}")
-            lines.append("")
-        
-        if "areas_of_concern" in co and co["areas_of_concern"]:
-            lines.append("### Areas of Concern")
-            for concern in co["areas_of_concern"]:
-                lines.append(f"- {concern}")
-            lines.append("")
-        
-        if "strengths_and_coping" in co and co["strengths_and_coping"]:
-            lines.append("### Strengths & Coping Mechanisms")
-            for strength in co["strengths_and_coping"]:
-                lines.append(f"- {strength}")
-            lines.append("")
-    
-    # Risk Assessment
-    if "risk_assessment" in notes:
-        risk = notes["risk_assessment"]
-        lines.append("## Risk Assessment")
-        lines.append("")
-        
-        if "suicide_self_harm" in risk:
-            ssh = risk["suicide_self_harm"]
-            lines.append("### Suicide/Self-Harm Risk")
-            lines.append(f"**Indicators:** {ssh.get('indicators', 'unclear')}")
-            lines.append(f"**Evidence:** {ssh.get('evidence', 'none provided')}")
-            if ssh.get("protective_factors"):
-                lines.append("**Protective Factors:**")
-                for factor in ssh["protective_factors"]:
-                    lines.append(f"- {factor}")
-            if ssh.get("recommended_actions"):
-                lines.append("**Recommended Actions:**")
-                for action in ssh["recommended_actions"]:
-                    lines.append(f"- {action}")
-            lines.append("")
-        
-        if "harm_to_others" in risk:
-            hto = risk["harm_to_others"]
-            lines.append("### Harm to Others Risk")
-            lines.append(f"**Indicators:** {hto.get('indicators', 'unclear')}")
-            lines.append(f"**Evidence:** {hto.get('evidence', 'none provided')}")
-            if hto.get("recommended_actions"):
-                lines.append("**Recommended Actions:**")
-                for action in hto["recommended_actions"]:
-                    lines.append(f"- {action}")
-            lines.append("")
-        
-        if "substance_use" in risk:
-            su = risk["substance_use"]
-            lines.append("### Substance Use Risk")
-            lines.append(f"**Indicators:** {su.get('indicators', 'unclear')}")
-            lines.append(f"**Evidence:** {su.get('evidence', 'none provided')}")
-            if su.get("recommended_actions"):
-                lines.append("**Recommended Actions:**")
-                for action in su["recommended_actions"]:
-                    lines.append(f"- {action}")
-            lines.append("")
-    
-    # Recommendations
-    if "recommendations" in notes:
-        rec = notes["recommendations"]
-        lines.append("## Recommendations")
-        lines.append("")
-        
-        if "future_topics" in rec and rec["future_topics"]:
-            lines.append("### Future Topics to Explore")
-            for topic in rec["future_topics"]:
+        if "main_topics" in summary and summary["main_topics"]:
+            lines.append("**Main Topics Discussed:**")
+            for topic in summary["main_topics"]:
                 lines.append(f"- {topic}")
             lines.append("")
         
-        if "interventions" in rec and rec["interventions"]:
-            lines.append("### Therapeutic Interventions")
-            for intervention in rec["interventions"]:
-                lines.append(f"- {intervention}")
+        if "patient_concerns" in summary and summary["patient_concerns"]:
+            lines.append("**Patient Concerns:**")
+            for concern in summary["patient_concerns"]:
+                lines.append(f"- {concern}")
             lines.append("")
         
-        if "follow_up_actions" in rec and rec["follow_up_actions"]:
-            lines.append("### Follow-up Actions")
-            for action in rec["follow_up_actions"]:
-                lines.append(f"- {action}")
+        if "session_structure" in summary:
+            lines.append(f"**Session Flow:** {summary['session_structure']}")
             lines.append("")
     
-    # Interaction Dynamics
-    if "interaction_dynamics" in notes:
-        dynamics = notes["interaction_dynamics"]
-        lines.append("## Interaction Dynamics")
+    # Extracted Facts
+    facts = notes.get("extracted_facts", {})
+    if facts:
+        lines.append("## Extracted Facts")
         lines.append("")
-        if "therapist_approach" in dynamics:
-            lines.append(f"**Therapist Approach:** {dynamics['therapist_approach']}")
+        
+        # Medications
+        if "medications" in facts and facts["medications"]:
+            lines.append("### Medications Mentioned")
+            for med in facts["medications"]:
+                dosage_str = f" ({med['dosage']})" if med.get("dosage") else ""
+                lines.append(f"- **{med['name']}**{dosage_str}")
+                lines.append(f"  - Context: \"{med['context']}\" [{med['timestamp']}]")
             lines.append("")
-        if "client_responsiveness" in dynamics:
-            lines.append(f"**Client Responsiveness:** {dynamics['client_responsiveness']}")
+        
+        # Symptoms
+        if "symptoms" in facts and facts["symptoms"]:
+            lines.append("### Symptoms Reported")
+            for symptom in facts["symptoms"]:
+                lines.append(f"- **\"{symptom['symptom']}\"** [{symptom['timestamp']}]")
+                if symptom.get("context"):
+                    lines.append(f"  - Full context: {symptom['context']}")
             lines.append("")
-        if "rapport_quality" in dynamics:
-            lines.append(f"**Rapport Quality:** {dynamics['rapport_quality']}")
+        
+        # Timeline Events
+        if "timeline_events" in facts and facts["timeline_events"]:
+            lines.append("### Timeline of Events")
+            for event in facts["timeline_events"]:
+                lines.append(f"- **{event['timeframe']}**: {event['event']}")
+                lines.append(f"  - Quote: \"{event['quote']}\" [{event['timestamp']}]")
             lines.append("")
+        
+        # Life Events
+        if "life_events" in facts and facts["life_events"]:
+            lines.append("### Life Events Mentioned")
+            for event in facts["life_events"]:
+                lines.append(f"- **{event['event']}**")
+                lines.append(f"  - Quote: \"{event['quote']}\" [{event['timestamp']}]")
+            lines.append("")
+    
+    # Clinical Templates
+    templates = notes.get("clinical_templates", {})
+    if templates:
+        lines.append("## Clinical Templates")
+        lines.append("")
+        lines.append("*Ready-to-use templates for clinical documentation:*")
+        lines.append("")
+        
+        if "soap_subjective" in templates:
+            lines.append("### SOAP Note - Subjective Section")
+            lines.append("```")
+            lines.append(templates["soap_subjective"].replace("\\n", "\n"))
+            lines.append("```")
+            lines.append("")
+        
+        if "hpi_template" in templates:
+            lines.append("### History of Present Illness Template")
+            lines.append("```")
+            lines.append(templates["hpi_template"].replace("\\n", "\n"))
+            lines.append("```")
+            lines.append("")
+        
+        if "fact_sheet" in templates:
+            lines.append("### Quick Reference Fact Sheet")
+            lines.append("```")
+            lines.append(templates["fact_sheet"].replace("\\n", "\n"))
+            lines.append("```")
+            lines.append("")
+    
+    lines.append("---")
+    lines.append("*This summary focuses on reliable fact extraction. Clinical interpretation and assessment should be completed by qualified clinicians.*")
     
     return "\n".join(lines)
