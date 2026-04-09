@@ -142,3 +142,23 @@ class DeleteNoteStyleRequest(BaseModel):
 class SetActiveNoteStyleRequest(BaseModel):
     user_id: str = Field(..., description="User identifier")
     note_style_id: str = Field(..., description="Note style ID to set as active")
+
+
+# ---------------------------------------------------------------------------
+# Background job tracking schemas
+# ---------------------------------------------------------------------------
+
+class JobSubmittedResponse(BaseModel):
+    job_id: str
+    status: str = "queued"
+    message: str
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str  # queued | processing | completed | failed
+    stage: Optional[str] = None
+    progress: Optional[int] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+    result: Optional[ProcessSessionResponse] = None

@@ -1,13 +1,13 @@
 import os
 import time
 import shutil
+import uuid
 from typing import Dict, Any, List, Optional
 import logging
 import contextlib
 import glob
-import asyncio
 
-from fastapi import FastAPI, HTTPException, Response, Query
+from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models.schemas import (
@@ -21,8 +21,10 @@ from app.models.schemas import (
     ListNoteStylesResponse,
     GenerateNotesWithStyleRequest,
     GenerateNotesWithStyleResponse,
-    DeleteNoteStyleRequest,
     SetActiveNoteStyleRequest,
+    # Background job schemas
+    JobSubmittedResponse,
+    JobStatusResponse,
 )
 from app.models.conversation import (
     ConversationCreate,
@@ -36,17 +38,10 @@ from app.services.video_processing import (
     download_audio_file,
     extract_audio_with_ffmpeg,
     convert_audio_to_wav,
-    extract_frames_with_ffmpeg,
-    has_video_stream,
     get_video_duration,
 )
-from app.services.analysis import (
-    analyze_frames_with_deepface,
-    analyze_audio_with_vesper,
-    merge_timelines,
-    detect_micro_spikes,
-)
-from app.services.transcription import transcribe_audio_with_faster_whisper, transcribe_long_audio_chunked
+from app.services.analysis import merge_timelines
+from app.services.transcription import transcribe_long_audio_chunked
 from app.services.congruence_engine import (
     build_congruence_timeline,
     build_session_summary,
@@ -109,6 +104,9 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
     logger.addHandler(_handler)
 
+
+# In-memory job store: job_id -> status dict (shared ref with processing_status inside each job)
+_jobs: Dict[str, Dict[str, Any]] = {}
 
 app = FastAPI(title="Emotion Analysis API", version="0.2.0")
 
@@ -178,30 +176,40 @@ def api_key_status() -> Dict[str, Any]:
 # Session Processing (existing pipeline)
 # =====================================================================
 
-@app.post("/process_session", response_model=ProcessSessionResponse)
-def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
-    """Full video/audio analysis pipeline - supports both video and audio-only inputs."""
+def _dbg(hypothesis, msg, data=None):
+    # #region agent log
+    import json as _j
+    try:
+        with open("/Users/arjunkulkarni/Desktop/BCONGRUENCE/.cursor/debug-adf136.log","a") as _f:
+            _f.write(_j.dumps({"sessionId":"adf136","hypothesisId":hypothesis,"location":"main.py","message":msg,"data":data or {},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
+
+def _run_session_job(job_id: str, payload: ProcessSessionRequest) -> None:
+    """Background worker: runs the full analysis pipeline and writes results into _jobs[job_id]."""
+    # processing_status IS _jobs[job_id] — every .update() call is immediately visible to pollers
+    processing_status = _jobs[job_id]
     start_time = time.time()
-    
-    # Generate unique request ID for tracking concurrent requests
-    import uuid
-    request_id = uuid.uuid4().hex[:8]
-    
-    # Determine input type
+    # #region agent log
+    _dbg("H1", "background_job_started", {"job_id": job_id, "patient_id": payload.patient_id})
+    # #endregion
+
+    request_id = job_id[:8]
+
     has_video = bool(payload.video_url)
     has_audio_only = bool(payload.audio_url and not payload.video_url)
-    
+
     logger.info(
         "[%s] process_session START patient_id=%s video_url=%s audio_url=%s mode=%s",
         request_id,
         payload.patient_id,
         payload.video_url,
         payload.audio_url,
-        "video" if has_video else "audio-only"
+        "video" if has_video else "audio-only",
     )
-    
-    # Initialize processing status tracking with request isolation
-    processing_status = {
+
+    processing_status.update({
         "request_id": request_id,
         "stage": "initializing",
         "progress": 0,
@@ -209,17 +217,17 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         "errors": [],
         "recording_saved": False,
         "duration_verified": False,
-        "concurrent_safe": True
-    }
+        "concurrent_safe": True,
+    })
     logger.info(
         "[%s] 🔧 PROCESSING OPTIONS: fast_mode=%s no_facial_analysis=%s skip_video_analysis=%s cleanup_files=%s",
         request_id,
         payload.fast_mode,
         payload.no_facial_analysis,
         payload.skip_video_analysis,
-        payload.cleanup_files
+        payload.cleanup_files,
     )
-    
+
     workspace_root = get_workspace_root()
     session_ts = int(time.time())
     session_dir, media_dir, frames_dir, outputs_dir = create_session_directories(
@@ -227,231 +235,150 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         patient_id=payload.patient_id,
         session_ts=session_ts,
     )
-    
+
     logger.info("[%s] Created unique session directory: %s", request_id, session_dir)
 
     video_path = os.path.join(media_dir, "input.mp4") if has_video else None
     audio_path = os.path.join(media_dir, "audio.wav")
 
-    # Track actual recording duration for accurate session summary
     actual_duration_seconds = None
 
     # 1) Download and process input file
     try:
         processing_status.update({"stage": "downloading", "progress": 10, "message": "Downloading media file..."})
         logger.info("📥 PROCESSING STATUS: %s", processing_status["message"])
-        
+
         if has_video:
-            # Video processing path
             logger.info("Downloading video file (timeout: 10 minutes)...")
             download_video_file(video_url=payload.video_url, destination_path=video_path)
-            
-            # Log video info for long video handling
+
             video_duration = get_video_duration(video_path)
-            actual_duration_seconds = video_duration  # Store for session summary
+            actual_duration_seconds = video_duration
             video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-            logger.info("Video downloaded: %.1f MB, duration: %.1f minutes", video_size_mb, video_duration/60)
-            
-            # Verify duration and mark recording as saved
+            logger.info("Video downloaded: %.1f MB, duration: %.1f minutes", video_size_mb, video_duration / 60)
+
             processing_status.update({
                 "recording_saved": True,
                 "duration_verified": True,
-                "message": f"Video saved successfully - {video_duration/60:.1f} minutes"
+                "message": f"Video saved successfully - {video_duration/60:.1f} minutes",
             })
-            logger.info("✅ RECORDING SAVED: Video file secured locally (%.1f MB, %.1f min)", video_size_mb, video_duration/60)
-            
-            if video_duration > 3600:  # 60+ minutes
-                logger.info("Long video detected (%.1f min) - using optimized processing", video_duration/60)
+            logger.info("✅ RECORDING SAVED: Video file secured locally (%.1f MB, %.1f min)", video_size_mb, video_duration / 60)
+
+            if video_duration > 3600:
+                logger.info("Long video detected (%.1f min) - using optimized processing", video_duration / 60)
+
         elif has_audio_only:
-            # Audio-only processing path
             logger.info("Downloading audio file (timeout: 10 minutes)...")
             audio_input_path = os.path.join(media_dir, "input_audio")
             download_audio_file(audio_url=payload.audio_url, destination_path=audio_input_path)
-            
-            # Convert to standard WAV format
+
             convert_audio_to_wav(input_audio_path=audio_input_path, output_audio_path=audio_path, fast_mode=payload.fast_mode)
-            
-            # Log audio info
+
             from app.services.transcription import get_audio_duration
             audio_duration = get_audio_duration(audio_path)
-            actual_duration_seconds = audio_duration  # Store for session summary
+            actual_duration_seconds = audio_duration
             audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-            logger.info("Audio processed: %.1f MB, duration: %.1f minutes", audio_size_mb, audio_duration/60)
-            
-            # Verify duration and mark recording as saved
+            logger.info("Audio processed: %.1f MB, duration: %.1f minutes", audio_size_mb, audio_duration / 60)
+
             processing_status.update({
                 "recording_saved": True,
                 "duration_verified": True,
-                "message": f"Audio saved successfully - {audio_duration/60:.1f} minutes"
+                "message": f"Audio saved successfully - {audio_duration/60:.1f} minutes",
             })
-            logger.info("✅ RECORDING SAVED: Audio file secured locally (%.1f MB, %.1f min)", audio_size_mb, audio_duration/60)
-            
-            if audio_duration > 3600:  # 60+ minutes
-                logger.info("Long audio detected (%.1f min) - using chunked processing", audio_duration/60)
+            logger.info("✅ RECORDING SAVED: Audio file secured locally (%.1f MB, %.1f min)", audio_size_mb, audio_duration / 60)
+
+            if audio_duration > 3600:
+                logger.info("Long audio detected (%.1f min) - using chunked processing", audio_duration / 60)
+
     except Exception as exc:
         with contextlib.suppress(Exception):
             if os.path.isdir(session_dir):
                 shutil.rmtree(session_dir)
         logger.exception("Input file download failed")
-        raise HTTPException(status_code=400, detail=f"Input file download failed: {exc}") from exc
+        processing_status.update({"status": "failed", "stage": "failed", "message": f"Input file download failed: {exc}"})
+        return
 
     # 2) Extract audio (only for video input)
     if has_video:
         try:
             processing_status.update({"stage": "audio_extraction", "progress": 20, "message": "Extracting audio from video..."})
             logger.info("📥 PROCESSING STATUS: %s", processing_status["message"])
-            
             extract_audio_with_ffmpeg(input_video_path=video_path, output_audio_path=audio_path, fast_mode=payload.fast_mode)
             logger.info("Audio extracted to %s", audio_path)
         except Exception as exc:
             processing_status["errors"].append(f"Audio extraction failed: {exc}")
             logger.exception("Audio extraction failed")
-            raise HTTPException(status_code=500, detail=f"Audio extraction failed: {exc}") from exc
+            processing_status.update({"status": "failed", "stage": "failed", "message": f"Audio extraction failed: {exc}"})
+            return
 
-    # 3) Extract frames (only for video input with actual video streams)
-    frame_count = 0
-    logger.info("🎬 FRAME EXTRACTION CHECK: has_video=%s skip_video=%s no_facial=%s", 
-                has_video, payload.skip_video_analysis, payload.no_facial_analysis)
-    
-    if has_video and not payload.skip_video_analysis and not payload.no_facial_analysis:
-        try:
-            processing_status.update({"stage": "frame_extraction", "progress": 30, "message": "Extracting video frames for analysis..."})
-            logger.info("📥 PROCESSING STATUS: %s", processing_status["message"])
-            
-            # Check if the video file actually has video streams
-            if has_video_stream(video_path):
-                extract_frames_with_ffmpeg(
-                    input_video_path=video_path,
-                    frames_dir=frames_dir,
-                    fps=0.1,  # Reduced from 0.3 to 0.1 fps (1 frame every 10 seconds)
-                    filename_pattern="frame_%04d.png",
-                    fast_mode=payload.fast_mode,  # Use fast mode based on request
-                )
-                frame_count = len(glob.glob(os.path.join(frames_dir, "frame_*.png")))
-                logger.info("Frames extracted to %s count=%d", frames_dir, frame_count)
-            else:
-                logger.info("Video file contains no video stream - treating as audio-only")
-                frame_count = 0
-        except Exception as exc:
-            logger.exception("Frame extraction failed")
-            # Don't fail the entire pipeline for frame extraction issues
-            # Log the error but continue with audio-only processing
-            logger.warning("Continuing with audio-only processing due to frame extraction failure")
-            frame_count = 0
-    else:
-        if payload.no_facial_analysis:
-            logger.info("Skipping frame extraction due to no_facial_analysis=True")
-        elif payload.skip_video_analysis:
-            logger.info("Skipping frame extraction due to skip_video_analysis=True")
-        else:
-            logger.info("Skipping frame extraction for audio-only input")
-
-    processing_status.update({"stage": "analysis", "progress": 50, "message": "Running AI analysis (transcription, facial, audio)..."})
+    # 3) Transcription only — facial/voice emotion analysis disabled for speed
+    processing_status.update({"stage": "transcription", "progress": 40, "message": "Transcribing audio..."})
     logger.info("📥 PROCESSING STATUS: %s", processing_status["message"])
-    logger.info("Starting parallel analysis...")
-    parallel_start = time.time()
+    transcription_start = time.time()
 
-    async def run_parallel_analysis():
-        loop = asyncio.get_event_loop()
-
-        async def async_transcription():
-            try:
-                # Choose model size based on fast_mode
-                model_size = "tiny" if payload.fast_mode else "small"
-                
-                # Use chunked transcription for long audio files
-                t_text, t_segments = await loop.run_in_executor(
-                    None, transcribe_long_audio_chunked, audio_path, model_size, "en", True, 10
-                )
-                if t_text:
-                    logger.info("Transcription completed chars=%d segments=%d", len(t_text or ""), len(t_segments or []))
-                    return t_text, t_segments
-                return None, None
-            except Exception:
-                logger.info("Transcription skipped or failed (best-effort)")
-                return None, None
-
-        async def async_deepface():
-            logger.info("🧠 DEEPFACE CHECK: has_video=%s frame_count=%d skip_video=%s no_facial=%s", 
-                        has_video, frame_count, payload.skip_video_analysis, payload.no_facial_analysis)
-            
-            if has_video and frame_count > 0 and not payload.skip_video_analysis and not payload.no_facial_analysis:
-                try:
-                    # Adaptive frame limits based on video duration and mode
-                    video_duration = get_video_duration(video_path) if video_path else 0
-                    
-                    if video_duration > 3600:  # 60+ minutes
-                        max_frames = 5 if payload.fast_mode else 10
-                    elif video_duration > 1800:  # 30+ minutes  
-                        max_frames = 8 if payload.fast_mode else 15
-                    else:  # < 30 minutes
-                        max_frames = 10 if payload.fast_mode else 20
-                    
-                    logger.info("Video duration: %.1f minutes, using max_frames: %d", video_duration/60, max_frames)
-                    
-                    result = await loop.run_in_executor(None, analyze_frames_with_deepface, frames_dir, max_frames)
-                    logger.info("DeepFace analysis completed entries=%d", len(result))
-                    return result
-                except Exception as exc:
-                    logger.exception("DeepFace analysis failed")
-                    raise HTTPException(status_code=500, detail=f"DeepFace analysis failed: {exc}") from exc
-            else:
-                if payload.no_facial_analysis:
-                    logger.info("Skipping DeepFace analysis due to no_facial_analysis=True")
-                elif payload.skip_video_analysis:
-                    logger.info("Skipping DeepFace analysis due to skip_video_analysis=True")
-                else:
-                    logger.info("Skipping DeepFace analysis for audio-only input")
-                return None
-
-        async def async_audio_emotion():
-            try:
-                result = await loop.run_in_executor(None, analyze_audio_with_vesper, audio_path)
-                logger.info("Audio emotion timeline entries=%d", len(result))
-                return result
-            except Exception as exc:
-                logger.exception("Audio emotion analysis failed (Vesper required)")
-                raise HTTPException(status_code=500, detail=f"Audio emotion analysis failed: {exc}") from exc
-
-        results = await asyncio.gather(
-            async_transcription(), async_deepface(), async_audio_emotion(), return_exceptions=False
-        )
-        return results
-
+    transcript_text = None
+    transcript_segments = None
     try:
-        parallel_results = asyncio.run(run_parallel_analysis())
-        (transcript_text, transcript_segments), facial_timeline, audio_timeline = parallel_results
-        parallel_duration = time.time() - parallel_start
-        logger.info("Parallel analysis completed in %.2fs", parallel_duration)
+        model_size = "tiny" if payload.fast_mode else "small"
+        # #region agent log
+        _dbg("H2", "transcription_start", {"audio_path": audio_path, "model_size": model_size})
+        # #endregion
+        transcript_text, transcript_segments = transcribe_long_audio_chunked(
+            audio_path, model_size, "en", True, 10
+        )
+        transcription_duration = time.time() - transcription_start
+        # #region agent log
+        _dbg("H2", "transcription_done", {"duration_s": round(transcription_duration, 2), "text_len": len(transcript_text or ""), "segments": len(transcript_segments or [])})
+        # #endregion
+        logger.info("Transcription completed in %.2fs: chars=%d segments=%d",
+                     transcription_duration, len(transcript_text or ""), len(transcript_segments or []))
         if transcript_text:
             logger.info("Transcript text:\n%s", transcript_text)
-        if transcript_segments:
-            logger.debug("Transcript segments: %s", transcript_segments)
     except Exception as exc:
-        logger.exception("Parallel analysis failed")
-        raise HTTPException(status_code=500, detail=f"Analysis pipeline failed: {exc}") from exc
+        # #region agent log
+        _dbg("H2", "transcription_crashed", {"error": str(exc)})
+        # #endregion
+        logger.exception("Transcription failed")
+        processing_status.update({"status": "failed", "stage": "failed", "message": f"Transcription failed: {exc}"})
+        return
+
+    # No facial or voice emotion analysis — pass empty timelines downstream
+    facial_timeline = None
+    audio_timeline = None
 
     merged_timeline = merge_timelines(facial_timeline=facial_timeline, audio_timeline=audio_timeline)
-    logger.info("Merged timeline entries=%d", len(merged_timeline))
+    logger.info("Merged timeline entries=%d (transcript-only mode)", len(merged_timeline))
+    # #region agent log
+    _dbg("H3", "merge_timelines_result", {"entries": len(merged_timeline)})
+    # #endregion
 
-    merged_timeline = detect_micro_spikes(merged_timeline, threshold=payload.spike_threshold)
-    spikes = [e for e in merged_timeline if e.get("micro_spike")]
-    logger.info("Detected spikes=%d", len(spikes))
+    spikes: list = []
+
+    # Variables that may not be set if the synthesis block raises
+    congruence_timeline_10hz = None
+    session_summary = None
+    therapist_notes = None
 
     try:
         processing_status.update({"stage": "synthesis", "progress": 80, "message": "Building session summary and timeline..."})
         logger.info("📥 PROCESSING STATUS: %s", processing_status["message"])
-        
+
         def _write_json(path: str, obj: object) -> None:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(obj, f, ensure_ascii=False, indent=2)
 
+        # #region agent log
+        _dbg("H3", "build_congruence_timeline_start", {"merged_len": len(merged_timeline), "segments": len(transcript_segments or []), "spikes": len(spikes)})
+        # #endregion
         congruence_timeline_10hz = build_congruence_timeline(
             merged_timeline=merged_timeline,
             transcript_segments=transcript_segments,
             spikes=spikes,
             target_hz=10.0,
         )
+        # #region agent log
+        _dbg("H3", "build_congruence_timeline_done", {"entries": len(congruence_timeline_10hz or [])})
+        # #endregion
         session_summary = build_session_summary(
             congruence_timeline=congruence_timeline_10hz,
             patient_id=payload.patient_id,
@@ -459,7 +386,9 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
             transcript_segments=transcript_segments,
             actual_duration_seconds=actual_duration_seconds,
         )
-        # Auto-save all outputs locally (NEVER lose data)
+        # #region agent log
+        _dbg("H3", "build_session_summary_done", {"has_summary": session_summary is not None, "keys": list((session_summary or {}).keys())})
+        # #endregion
         _write_json(os.path.join(outputs_dir, "timeline.json"), congruence_timeline_10hz)
         _write_json(os.path.join(outputs_dir, "timeline_1hz.json"), merged_timeline)
         _write_json(os.path.join(outputs_dir, "spikes.json"), spikes)
@@ -469,14 +398,10 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                 f.write(transcript_text)
         if transcript_segments:
             _write_json(os.path.join(outputs_dir, "transcript_segments.json"), transcript_segments)
-        
-        # Save processing status for debugging
         _write_json(os.path.join(outputs_dir, "processing_status.json"), processing_status)
-        
         logger.info("✅ AUTO-SAVE: All outputs secured locally in %s", outputs_dir)
         processing_status.update({"local_backup_saved": True})
 
-        # Simplified analysis
         logger.info("Running simplified analysis (3 signals)...")
         try:
             simplified_results = run_simplified_analysis(
@@ -502,17 +427,19 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         except Exception as exc:
             logger.exception("Simplified analysis failed (non-critical): %s", exc)
 
-        therapist_notes = None
-        if transcript_text and locals().get("session_summary"):
+        if transcript_text and session_summary:
             logger.info("Generating therapist notes...")
             try:
                 therapist_notes = generate_therapist_notes(
                     transcript_text=transcript_text,
                     transcript_segments=transcript_segments,
-                    session_summary=locals().get("session_summary"),
+                    session_summary=session_summary,
                     patient_id=payload.patient_id,
                 )
                 if therapist_notes:
+                    # Attach transcript for the Full Transcript section in markdown output
+                    therapist_notes["_transcript_text"] = transcript_text or ""
+                    therapist_notes["_transcript_segments"] = transcript_segments or []
                     therapist_notes_path = os.path.join(outputs_dir, "therapist_notes.md")
                     save_therapist_notes(therapist_notes, therapist_notes_path)
                     logger.info("Therapist notes generated and saved (%d chars)", len(therapist_notes))
@@ -520,52 +447,42 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                     logger.info("Therapist notes generation skipped")
             except Exception as exc:
                 logger.exception("Therapist notes generation failed (non-critical): %s", exc)
-        
-        # Database upload with retry logic (NEVER lose data)
+
         session_video_id = None
-        if locals().get("session_summary") or therapist_notes:
+        if session_summary or therapist_notes:
             logger.info("Post-processing: Uploading to database with retry logic...")
-            
-            # Retry database operations up to 3 times
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     db = get_conversation_db()
                     if db.is_enabled():
-                        # Find the most recent session_video for this patient (just created)
                         video_query = db.client.table("session_videos")\
                             .select("id")\
                             .eq("patient_id", payload.patient_id)\
                             .order("created_at", desc=True)\
                             .limit(1)\
                             .execute()
-                        
+
                         if video_query.data:
                             session_video_id = video_query.data[0]["id"]
-                            
-                            # Extract facts from therapist notes or session summary
                             if therapist_notes:
                                 extract_facts_from_therapist_notes(
                                     session_video_id=session_video_id,
                                     patient_id=payload.patient_id,
-                                    therapist_notes=therapist_notes
+                                    therapist_notes=therapist_notes,
                                 )
-                            elif locals().get("session_summary"):
+                            elif session_summary:
                                 extract_facts_from_analysis(
                                     session_video_id=session_video_id,
                                     patient_id=payload.patient_id,
-                                    session_summary=locals().get("session_summary")
+                                    session_summary=session_summary,
                                 )
-                            
                             logger.info("✅ DATABASE UPLOAD: Session facts uploaded successfully")
-                            
-                            # Update patient clinical state
                             logger.info("Updating patient clinical state...")
                             update_patient_clinical_state(patient_id=payload.patient_id)
                             logger.info("✅ DATABASE UPLOAD: Patient clinical state updated")
-                            
                             processing_status.update({"database_upload_success": True})
-                            break  # Success, exit retry loop
+                            break
                         else:
                             logger.warning("Could not find session_video record to link facts")
                             processing_status.update({"database_upload_success": False, "database_error": "No session_video record found"})
@@ -574,71 +491,77 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
                         logger.warning("Database not enabled, skipping upload")
                         processing_status.update({"database_upload_success": False, "database_error": "Database not enabled"})
                         break
-                        
                 except Exception as exc:
-                    logger.warning(f"Database upload attempt {attempt + 1}/{max_retries} failed: {exc}")
+                    logger.warning("Database upload attempt %d/%d failed: %s", attempt + 1, max_retries, exc)
                     processing_status["errors"].append(f"Database upload attempt {attempt + 1} failed: {exc}")
-                    
                     if attempt == max_retries - 1:
-                        # Final attempt failed
                         logger.error("❌ DATABASE UPLOAD FAILED: All retry attempts exhausted. Data saved locally.")
                         processing_status.update({
-                            "database_upload_success": False, 
+                            "database_upload_success": False,
                             "database_error": f"All {max_retries} retry attempts failed",
-                            "local_backup_available": True
+                            "local_backup_available": True,
                         })
                     else:
-                        # Wait before retry (exponential backoff: 1s, 2s, 4s)
                         time.sleep(2 ** attempt)
 
     except Exception as exc:
+        # #region agent log
+        _dbg("H3", "synthesis_block_crashed", {"error": str(exc), "type": type(exc).__name__})
+        # #endregion
         logger.exception("Failed to write enriched outputs: %s", exc)
 
-    # Clean up large temporary files if requested (default: True)
     if payload.cleanup_files:
         cleanup_large_files(session_dir, video_path, audio_path, frames_dir)
         logger.info("Temporary files cleaned up to save disk space")
 
-    # Final status update
     processing_status.update({
-        "stage": "completed", 
-        "progress": 100, 
+        "stage": "completed",
+        "progress": 100,
         "message": "Session processing completed successfully",
-        "duration_verified": actual_duration_seconds is not None
+        "duration_verified": actual_duration_seconds is not None,
     })
     logger.info("✅ PROCESSING COMPLETED: %s", processing_status["message"])
-    
-    # Verify duration accuracy
-    if actual_duration_seconds and locals().get("session_summary"):
-        summary_duration = locals().get("session_summary", {}).get("duration", 0)
+
+    if actual_duration_seconds and session_summary:
+        summary_duration = session_summary.get("duration", 0)
         duration_diff = abs(actual_duration_seconds - summary_duration)
-        if duration_diff < 5:  # Within 5 seconds is acceptable
-            logger.info("✅ DURATION VERIFIED: Actual=%.1fs, Summary=%.1fs (diff=%.1fs)", 
+        if duration_diff < 5:
+            logger.info("✅ DURATION VERIFIED: Actual=%.1fs, Summary=%.1fs (diff=%.1fs)",
                        actual_duration_seconds, summary_duration, duration_diff)
         else:
-            logger.warning("⚠️ DURATION MISMATCH: Actual=%.1fs, Summary=%.1fs (diff=%.1fs)", 
+            logger.warning("⚠️ DURATION MISMATCH: Actual=%.1fs, Summary=%.1fs (diff=%.1fs)",
                           actual_duration_seconds, summary_duration, duration_diff)
             processing_status["errors"].append(f"Duration mismatch: {duration_diff:.1f}s difference")
 
-    resp = ProcessSessionResponse(
-        patient_id=payload.patient_id,
-        session_timestamp=session_ts,
-        paths={
-            "session_dir": session_dir,
-            "media_dir": media_dir,
-            "frames_dir": frames_dir if has_video else None,
-            "audio_path": audio_path,
-            "video_path": video_path if has_video else None,
-        },
-        timeline_json=merged_timeline,
-        spikes_json=spikes,
-        timeline_10hz=locals().get("congruence_timeline_10hz"),
-        session_summary=locals().get("session_summary"),
-        notes=therapist_notes,
-        transcript_text=transcript_text,
-        transcript_segments=transcript_segments,
-        processing_status=processing_status,
-    )
+    # #region agent log
+    _dbg("H5", "building_response", {"has_transcript": bool(transcript_text), "has_notes": therapist_notes is not None, "timeline_len": len(merged_timeline), "spikes_len": len(spikes)})
+    # #endregion
+    try:
+        resp = ProcessSessionResponse(
+            patient_id=payload.patient_id,
+            session_timestamp=session_ts,
+            paths={
+                "session_dir": session_dir,
+                "media_dir": media_dir,
+                "frames_dir": frames_dir if has_video else None,
+                "audio_path": audio_path,
+                "video_path": video_path if has_video else None,
+            },
+            timeline_json=merged_timeline,
+            spikes_json=spikes,
+            timeline_10hz=congruence_timeline_10hz,
+            session_summary=session_summary,
+            notes=therapist_notes,
+            transcript_text=transcript_text,
+            transcript_segments=transcript_segments,
+            processing_status=processing_status,
+        )
+    except Exception as exc:
+        # #region agent log
+        _dbg("H5", "response_construction_failed", {"error": str(exc), "type": type(exc).__name__})
+        # #endregion
+        processing_status.update({"status": "failed", "stage": "failed", "message": f"Response construction failed: {exc}"})
+        return
     duration = time.time() - start_time
     logger.info(
         "[%s] process_session END patient_id=%s session_ts=%d duration_s=%.2f",
@@ -647,7 +570,39 @@ def process_session(payload: ProcessSessionRequest) -> ProcessSessionResponse:
         session_ts,
         duration,
     )
-    return resp
+
+    processing_status.update({"status": "completed", "result": resp.model_dump()})
+    # #region agent log
+    _dbg("H1", "background_job_completed", {"job_id": job_id, "total_duration_s": round(duration, 2)})
+    # #endregion
+
+
+@app.post("/process_session", response_model=JobSubmittedResponse)
+def process_session(payload: ProcessSessionRequest, background_tasks: BackgroundTasks) -> JobSubmittedResponse:
+    """Enqueue a full video/audio analysis job and return immediately."""
+    job_id = uuid.uuid4().hex
+    _jobs[job_id] = {"status": "queued", "stage": "queued", "progress": 0, "message": "Job queued, processing will begin shortly"}
+    background_tasks.add_task(_run_session_job, job_id, payload)
+    logger.info("Enqueued session job %s for patient_id=%s", job_id, payload.patient_id)
+    return JobSubmittedResponse(job_id=job_id, status="queued", message="Processing started in background. Poll /jobs/{job_id} for status.")
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str) -> JobStatusResponse:
+    """Poll the status of a background processing job."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    result = job.get("result")
+    return JobStatusResponse(
+        job_id=job_id,
+        status=job.get("status", "processing"),
+        stage=job.get("stage"),
+        progress=job.get("progress"),
+        message=job.get("message"),
+        error=job.get("error"),
+        result=ProcessSessionResponse(**result) if result else None,
+    )
 
 
 # =====================================================================
