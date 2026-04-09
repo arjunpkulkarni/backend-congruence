@@ -380,16 +380,12 @@ def save_therapist_notes(
 
 
 def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
-    """Convert notes to the required 3-section markdown:
-    1. SOAP Note
-    2. Short Transcript Summary
-    3. Full Transcript
-    """
+    """Convert notes to markdown matching real psychiatric progress note format."""
     lines = []
 
     # Handle style-matched format
     if notes.get("format") == "style_matched":
-        lines.append("# SOAP Note")
+        lines.append("# Progress Note")
         lines.append("")
         lines.append(notes.get("content", "No content available"))
         lines.append("")
@@ -397,52 +393,84 @@ def _convert_notes_to_markdown(notes: Dict[str, Any]) -> str:
         _append_full_transcript(lines, notes)
         return "\n".join(lines)
 
-    # ── Section 1: SOAP Note ──
-    lines.append("# SOAP Note")
+    # Handle legacy SOAP format (backwards compatibility)
+    if "soap_note" in notes and "identifying_data" not in notes:
+        return _convert_legacy_soap_to_markdown(notes)
+
+    # ── Progress Note ──
+    lines.append("# Progress Note")
     lines.append("")
 
-    soap_note = notes.get("soap_note", {})
+    lines.append("## Identifying Data")
+    lines.append("")
+    lines.append(notes.get("identifying_data", "Not discussed in this session."))
+    lines.append("")
 
-    # Subjective
-    subjective = soap_note.get("subjective", {})
     lines.append("## Subjective")
-    lines.append(f"- **Chief complaint:** {subjective.get('chief_complaint', 'Not discussed in this session')}")
-    key_symptoms = subjective.get("key_symptoms", [])
-    if key_symptoms:
-        lines.append("- **Key symptoms:**")
-        for symptom in key_symptoms:
-            lines.append(f"  - {symptom}")
-    else:
-        lines.append("- **Key symptoms:** Not discussed in this session")
-    lines.append(f"- **Patient perspective:** {subjective.get('patient_perspective', 'Not discussed in this session')}")
+    lines.append("")
+    lines.append(notes.get("subjective", "Not discussed in this session."))
     lines.append("")
 
-    # Objective
-    objective = soap_note.get("objective", {})
-    lines.append("## Objective")
-    lines.append(f"- **Mental status exam:** {objective.get('mental_status_exam', 'Not discussed in this session')}")
-    lines.append(f"- **Observations:** {objective.get('observations', 'Not discussed in this session')}")
+    lines.append("## Mental Status Exam")
+    lines.append("")
+    lines.append(notes.get("mental_status_exam", "Not discussed in this session."))
     lines.append("")
 
-    # Assessment
-    assessment = soap_note.get("assessment", {})
-    lines.append("## Assessment")
-    lines.append(f"- {assessment.get('clinical_interpretation', 'Not discussed in this session')}")
-    lines.append(f"- **Diagnosis:** {assessment.get('diagnosis', 'Not stated')}")
+    lines.append("## Assessment & Plan")
+    lines.append("")
+    lines.append(notes.get("assessment_and_plan", "Not discussed in this session."))
     lines.append("")
 
-    # Plan
-    plan = soap_note.get("plan", {})
-    lines.append("## Plan")
-    lines.append(f"- **Treatment plan:** {plan.get('treatment_plan', 'Not discussed in this session')}")
-    lines.append(f"- **Medications:** {plan.get('medications', 'Not discussed in this session')}")
-    lines.append(f"- **Next steps:** {plan.get('next_steps', 'Not discussed in this session')}")
-    lines.append("")
-
-    # ── Section 2: Short Transcript Summary ──
+    # ── Transcript Summary ──
     _append_transcript_summary(lines, notes)
 
-    # ── Section 3: Full Transcript ──
+    # ── Full Transcript ──
+    _append_full_transcript(lines, notes)
+
+    return "\n".join(lines)
+
+
+def _convert_legacy_soap_to_markdown(notes: Dict[str, Any]) -> str:
+    """Backwards-compatible renderer for old SOAP-structured notes."""
+    lines = []
+    lines.append("# Progress Note")
+    lines.append("")
+
+    soap = notes.get("soap_note", {})
+
+    subj = soap.get("subjective", {})
+    lines.append("## Subjective")
+    lines.append("")
+    lines.append(subj.get("chief_complaint", ""))
+    if subj.get("patient_perspective"):
+        lines.append(subj["patient_perspective"])
+    lines.append("")
+
+    obj = soap.get("objective", {})
+    lines.append("## Mental Status Exam")
+    lines.append("")
+    lines.append(obj.get("mental_status_exam", "Not discussed in this session."))
+    lines.append("")
+
+    assess = soap.get("assessment", {})
+    plan = soap.get("plan", {})
+    lines.append("## Assessment & Plan")
+    lines.append("")
+    parts = []
+    if assess.get("clinical_interpretation"):
+        parts.append(assess["clinical_interpretation"])
+    if assess.get("diagnosis") and assess["diagnosis"] != "Not stated":
+        parts.append(f"Diagnosis: {assess['diagnosis']}.")
+    if plan.get("treatment_plan"):
+        parts.append(plan["treatment_plan"])
+    if plan.get("medications") and plan["medications"] != "Not discussed in this session":
+        parts.append(f"Medications: {plan['medications']}.")
+    if plan.get("next_steps"):
+        parts.append(plan["next_steps"])
+    lines.append(" ".join(parts) if parts else "Not discussed in this session.")
+    lines.append("")
+
+    _append_transcript_summary(lines, notes)
     _append_full_transcript(lines, notes)
 
     return "\n".join(lines)
