@@ -22,7 +22,6 @@ from app.models.schemas import (
     GenerateNotesWithStyleRequest,
     GenerateNotesWithStyleResponse,
     SetActiveNoteStyleRequest,
-    # Background job schemas
     JobSubmittedResponse,
     JobStatusResponse,
 )
@@ -186,9 +185,58 @@ def _dbg(hypothesis, msg, data=None):
         pass
     # #endregion
 
+def _deliver_webhook(
+    webhook_url: str,
+    webhook_secret: Optional[str],
+    job_id: str,
+    session_video_id: Optional[str],
+    result: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Fire-and-forget POST to the caller's webhook with the processing result."""
+    import requests as _req
+
+    body: Dict[str, Any] = {
+        "job_id": job_id,
+        "status": "completed" if result else "failed",
+    }
+    if session_video_id:
+        body["session_video_id"] = session_video_id
+    if result:
+        body["result"] = result
+    if error:
+        body["error"] = error
+
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if webhook_secret:
+        headers["X-Webhook-Secret"] = webhook_secret
+
+    try:
+        resp = _req.post(webhook_url, json=body, headers=headers, timeout=30)
+        logger.info("Webhook delivered to %s — status %d", webhook_url, resp.status_code)
+    except Exception as exc:
+        logger.warning("Webhook delivery to %s failed: %s", webhook_url, exc)
+
+
 def _run_session_job(job_id: str, payload: ProcessSessionRequest) -> None:
-    """Background worker: runs the full analysis pipeline and writes results into _jobs[job_id]."""
-    # processing_status IS _jobs[job_id] — every .update() call is immediately visible to pollers
+    """Wrapper that runs the pipeline and delivers a webhook when finished (success or failure)."""
+    try:
+        _run_session_job_inner(job_id, payload)
+    finally:
+        if payload.webhook_url:
+            job = _jobs.get(job_id, {})
+            _deliver_webhook(
+                webhook_url=payload.webhook_url,
+                webhook_secret=payload.webhook_secret,
+                job_id=job_id,
+                session_video_id=payload.session_video_id,
+                result=job.get("result"),
+                error=job.get("message") if job.get("status") == "failed" else None,
+            )
+
+
+def _run_session_job_inner(job_id: str, payload: ProcessSessionRequest) -> None:
+    """Core pipeline: full analysis, writes results into _jobs[job_id]."""
     processing_status = _jobs[job_id]
     start_time = time.time()
     # #region agent log
@@ -579,12 +627,31 @@ def _run_session_job(job_id: str, payload: ProcessSessionRequest) -> None:
 
 @app.post("/process_session", response_model=JobSubmittedResponse)
 def process_session(payload: ProcessSessionRequest, background_tasks: BackgroundTasks) -> JobSubmittedResponse:
-    """Enqueue a full video/audio analysis job and return immediately."""
+    """Enqueue a background analysis job and return immediately. Poll GET /jobs/{job_id} for results."""
     job_id = uuid.uuid4().hex
     _jobs[job_id] = {"status": "queued", "stage": "queued", "progress": 0, "message": "Job queued, processing will begin shortly"}
     background_tasks.add_task(_run_session_job, job_id, payload)
     logger.info("Enqueued session job %s for patient_id=%s", job_id, payload.patient_id)
     return JobSubmittedResponse(job_id=job_id, status="queued", message="Processing started in background. Poll /jobs/{job_id} for status.")
+
+
+@app.post("/process_session_sync", response_model=ProcessSessionResponse)
+def process_session_sync(payload: ProcessSessionRequest) -> ProcessSessionResponse:
+    """Blocking variant — runs the full pipeline and returns the complete result."""
+    job_id = uuid.uuid4().hex
+    _jobs[job_id] = {"status": "queued", "stage": "queued", "progress": 0, "message": "Job queued, processing will begin shortly"}
+    logger.info("Starting synchronous session job %s for patient_id=%s", job_id, payload.patient_id)
+    _run_session_job(job_id, payload)
+
+    job = _jobs[job_id]
+    if job.get("status") == "failed":
+        raise HTTPException(status_code=500, detail=job.get("message", "Processing failed"))
+
+    result = job.get("result")
+    if not result:
+        raise HTTPException(status_code=500, detail="Processing completed but produced no result")
+
+    return ProcessSessionResponse(**result)
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
