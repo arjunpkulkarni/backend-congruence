@@ -12,9 +12,9 @@ class ProcessSessionRequest(BaseModel):
     skip_video_analysis: bool = Field(False, description="Skip video frame analysis entirely (audio-only processing)")
     no_facial_analysis: bool = Field(False, description="Skip all facial analysis (frame extraction + DeepFace) for maximum speed")
     cleanup_files: bool = Field(True, description="Clean up temporary files after processing to save disk space")
-    webhook_url: Optional[str] = Field(None, description="URL to POST the full result to when processing completes")
-    webhook_secret: Optional[str] = Field(None, description="Shared secret sent in X-Webhook-Secret header for verification")
-    session_video_id: Optional[str] = Field(None, description="Supabase session_videos.id — passed through to the webhook payload")
+    # webhook_url: Optional[str] = Field(None, description="URL to POST the full result to when processing completes")
+    # webhook_secret: Optional[str] = Field(None, description="Shared secret sent in X-Webhook-Secret header for verification")
+    # session_video_id: Optional[str] = Field(None, description="Supabase session_videos.id — passed through to the webhook payload")
 
     @model_validator(mode='after')
     def at_least_one_url_required(self):

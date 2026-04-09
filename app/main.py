@@ -185,58 +185,8 @@ def _dbg(hypothesis, msg, data=None):
         pass
     # #endregion
 
-def _deliver_webhook(
-    webhook_url: str,
-    webhook_secret: Optional[str],
-    job_id: str,
-    session_video_id: Optional[str],
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
-) -> None:
-    """Fire-and-forget POST to the caller's webhook with the processing result."""
-    import requests as _req
-
-    body: Dict[str, Any] = {
-        "job_id": job_id,
-        "status": "completed" if result else "failed",
-    }
-    if session_video_id:
-        body["session_video_id"] = session_video_id
-    if result:
-        body["result"] = result
-    if error:
-        body["error"] = error
-
-    headers: Dict[str, str] = {"Content-Type": "application/json"}
-    if webhook_secret:
-        headers["X-Webhook-Secret"] = webhook_secret
-
-    try:
-        resp = _req.post(webhook_url, json=body, headers=headers, timeout=30)
-        logger.info("Webhook delivered to %s — status %d", webhook_url, resp.status_code)
-    except Exception as exc:
-        logger.warning("Webhook delivery to %s failed: %s", webhook_url, exc)
-
-
 def _run_session_job(job_id: str, payload: ProcessSessionRequest) -> None:
-    """Wrapper that runs the pipeline and delivers a webhook when finished (success or failure)."""
-    try:
-        _run_session_job_inner(job_id, payload)
-    finally:
-        if payload.webhook_url:
-            job = _jobs.get(job_id, {})
-            _deliver_webhook(
-                webhook_url=payload.webhook_url,
-                webhook_secret=payload.webhook_secret,
-                job_id=job_id,
-                session_video_id=payload.session_video_id,
-                result=job.get("result"),
-                error=job.get("message") if job.get("status") == "failed" else None,
-            )
-
-
-def _run_session_job_inner(job_id: str, payload: ProcessSessionRequest) -> None:
-    """Core pipeline: full analysis, writes results into _jobs[job_id]."""
+    """Background worker: runs the full analysis pipeline and writes results into _jobs[job_id]."""
     processing_status = _jobs[job_id]
     start_time = time.time()
     # #region agent log
