@@ -260,7 +260,7 @@ Generate a note in the same format and style as the reference note. Focus on mat
                 {"role": "user", "content": style_matching_prompt}
             ],
             temperature=0.3,  # Some creativity for style matching, but not too much
-            max_tokens=2500
+            max_tokens=4000
         )
         
         note_content = response.choices[0].message.content
@@ -299,7 +299,7 @@ def _call_llm_step(
     user_message: str,
     step_name: str,
     temperature: float = 0.3,
-    max_tokens: int = 2000,
+    max_tokens: int = 4000,
 ) -> Optional[Dict[str, Any]]:
     """Call LLM for a single pipeline step with error handling."""
     try:

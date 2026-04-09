@@ -10,7 +10,7 @@ def _ensure_ffmpeg_exists() -> None:
         raise RuntimeError("ffmpeg is not installed or not in PATH. Please install ffmpeg and retry.")
 
 
-def download_video_file(video_url: str, destination_path: str, timeout: int = 600) -> None:
+def download_video_file(video_url: str, destination_path: str, timeout: int = 1800) -> None:
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
     with requests.get(video_url, stream=True, timeout=timeout) as response:
         response.raise_for_status()
@@ -136,7 +136,7 @@ def extract_frames_with_ffmpeg(
         raise RuntimeError(f"ffmpeg frame extraction failed: {completed.stderr.decode(errors='ignore')}")
 
 
-def download_audio_file(audio_url: str, destination_path: str, timeout: int = 600) -> None:
+def download_audio_file(audio_url: str, destination_path: str, timeout: int = 1800) -> None:
     """Download audio file from URL."""
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
     with requests.get(audio_url, stream=True, timeout=timeout) as response:
